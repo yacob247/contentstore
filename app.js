@@ -1,7 +1,7 @@
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, deleteDoc, doc, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        import { auditSubmissionDraft } from "./sandbox-auditor.js";
+        import { auditSubmissionDraft } from "./security/sandbox-auditor.js";
 
 
 
@@ -34,6 +34,8 @@
             'archive': { label: 'Archives', icon: 'fa-file-zipper', color: 'text-yellow-500' },
             'other': { label: 'Misc / Other', icon: 'fa-file', color: 'text-gray-400' }
         };
+
+        const SECURITY_BACKEND_BASE_URL = (typeof __security_backend_url !== 'undefined' ? __security_backend_url : 'http://127.0.0.1:8787').replace(/\/+$/, '');
 
         let app, auth, db, appId;
         let unsubPublic = null;
@@ -303,22 +305,12 @@
             const item = state.allItems.find(i => i.id === id); 
             if (!item) return;
 
-            const imgUrl = item.imageUrl || 'https://via.placeholder.com/800x400/1f2937/4b5563?text=Cover+Art';
+            const imgUrl = getRenderableImageUrl(item, 'https://via.placeholder.com/800x400/1f2937/4b5563?text=Cover+Art');
             const catInfo = CATEGORIES[item.category] || CATEGORIES['other'];
             const isOwner = state.user && !state.user.isAnonymous && item.submitterUid === state.user.uid;
 
             let filesHTML = item.files && item.files.length > 0 
-                ? item.files.map(f => `
-                    <div class="flex items-center justify-between bg-gray-800 border border-gray-700 p-4 rounded-xl mb-3 hover:border-blue-500/50 transition duration-300">
-                        <div class="flex items-center gap-4">
-                            <div class="w-10 h-10 rounded-lg bg-gray-700 flex items-center justify-center ${CATEGORIES[f.type]?.color || 'text-white'} bg-opacity-20"><i class="fa-solid ${CATEGORIES[f.type]?.icon || 'fa-file'} text-lg"></i></div>
-                            <div>
-                                <h4 class="text-white font-bold truncate max-w-[180px] sm:max-w-[300px] text-sm">${f.name || 'File'}</h4>
-                                <p class="text-xs text-green-400 mt-0.5"><i class="fa-solid fa-shield-check mr-1"></i>Secure Link</p>
-                            </div>
-                        </div>
-                        <a href="${f.url}" target="_blank" class="bg-blue-600 hover:bg-blue-500 text-white px-5 py-2 rounded-lg font-bold shadow flex items-center gap-2 text-sm"><i class="fa-solid fa-cloud-arrow-down"></i> <span class="hidden sm:inline">Download</span></a>
-                    </div>`).join('')
+                ? item.files.map(f => getFileModalRowHTML(item, f)).join('')
                 : `<p class="text-gray-500 italic p-4 text-center bg-gray-800 rounded-xl border border-gray-700">No downloadable files attached.</p>`;
 
             openModal(`
@@ -413,7 +405,7 @@
 
         // Reusable item renderer for Workspace views
         function renderWorkspaceItem(item) {
-            let imgUrl = item.imageUrl || 'https://via.placeholder.com/400x225/1f2937/4b5563?text=Content';
+            let imgUrl = getRenderableImageUrl(item, 'https://via.placeholder.com/400x225/1f2937/4b5563?text=Content');
             const isPending = item.status === 'pending';
             const isRejected = item.status === 'rejected';
             
@@ -469,7 +461,7 @@
             }
 
             const renderCard = (item) => {
-                let imgUrl = item.imageUrl || 'https://via.placeholder.com/400x225/1f2937/4b5563?text=Verified+Content';
+                let imgUrl = getRenderableImageUrl(item, 'https://via.placeholder.com/400x225/1f2937/4b5563?text=Verified+Content');
                 const catInfo = CATEGORIES[item.category] || CATEGORIES['collection'];
                 let isVideo = item.category === 'video';
                 let primaryVideoId = isVideo && item.files?.length ? getYouTubeId(item.files[0].url) : null;
@@ -633,6 +625,70 @@
             syncAuditErrorsUI();
         }
 
+        function buildSecurityBackendUrl(path) {
+            return `${SECURITY_BACKEND_BASE_URL}${path}`;
+        }
+
+        function getSecurityBackendReportUrl(scanId) {
+            return buildSecurityBackendUrl(`/api/uploads/report/${scanId}`);
+        }
+
+        function getSecurityBackendFileUrl(scanId) {
+            return buildSecurityBackendUrl(`/api/uploads/${scanId}/file`);
+        }
+
+        function buildBackendScanMeta(scanResult) {
+            if (!scanResult?.id) return null;
+            return {
+                id: scanResult.id,
+                status: scanResult.status,
+                verdict: scanResult.verdict,
+                reportUrl: getSecurityBackendReportUrl(scanResult.id),
+                fileUrl: getSecurityBackendFileUrl(scanResult.id),
+                findings: (scanResult.findings || []).map(finding => ({
+                    kind: finding.kind || '',
+                    severity: finding.severity || '',
+                    reason: finding.reason || ''
+                }))
+            };
+        }
+
+        function getRenderableImageUrl(item, fallbackUrl) {
+            if (item.imageScan && item.status !== 'approved') return fallbackUrl;
+            return item.imageUrl || fallbackUrl;
+        }
+
+        function getFileModalRowHTML(item, file) {
+            const reportUrl = file?.backendScan?.reportUrl;
+            const isQuarantined = Boolean(file?.backendScan) && item.status !== 'approved';
+            const hasDownload = Boolean(file?.url) && !isQuarantined;
+
+            let actionHTML = `<span class="bg-gray-700 text-gray-300 px-4 py-2 rounded-lg font-bold text-sm">Unavailable</span>`;
+            if (isQuarantined && reportUrl) {
+                actionHTML = `<a href="${reportUrl}" target="_blank" class="bg-amber-600 hover:bg-amber-500 text-white px-5 py-2 rounded-lg font-bold shadow flex items-center gap-2 text-sm"><i class="fa-solid fa-file-shield"></i> <span class="hidden sm:inline">Scan Report</span></a>`;
+            } else if (hasDownload) {
+                actionHTML = `<a href="${file.url}" target="_blank" class="bg-blue-600 hover:bg-blue-500 text-white px-5 py-2 rounded-lg font-bold shadow flex items-center gap-2 text-sm"><i class="fa-solid fa-cloud-arrow-down"></i> <span class="hidden sm:inline">Download</span></a>`;
+            }
+
+            const statusText = isQuarantined
+                ? '<i class="fa-solid fa-clock mr-1"></i>Quarantined until admin release'
+                : '<i class="fa-solid fa-shield-check mr-1"></i>Secure Link';
+
+            const statusClass = isQuarantined ? 'text-amber-400' : 'text-green-400';
+
+            return `
+                <div class="flex items-center justify-between bg-gray-800 border border-gray-700 p-4 rounded-xl mb-3 hover:border-blue-500/50 transition duration-300 gap-4">
+                    <div class="flex items-center gap-4 min-w-0">
+                        <div class="w-10 h-10 rounded-lg bg-gray-700 flex items-center justify-center ${CATEGORIES[file.type]?.color || 'text-white'} bg-opacity-20 flex-shrink-0"><i class="fa-solid ${CATEGORIES[file.type]?.icon || 'fa-file'} text-lg"></i></div>
+                        <div class="min-w-0">
+                            <h4 class="text-white font-bold truncate max-w-[180px] sm:max-w-[300px] text-sm">${escapeHtml(file.name || 'File')}</h4>
+                            <p class="text-xs ${statusClass} mt-0.5">${statusText}</p>
+                        </div>
+                    </div>
+                    <div class="flex-shrink-0">${actionHTML}</div>
+                </div>`;
+        }
+
         // Edit/Upload Form UI Helpers
         window.updateDraftMeta = (field, val) => { state.draftMeta[field] = val; clearAuditErrors(); };
         window.updateDraftImage = (field, val) => { state.draftImage[field] = val; clearAuditErrors(); if(field==='inputType') render(); };
@@ -731,48 +787,39 @@
         }
 
         // Upload Engine
-        async function uploadToFreeHost(file, onProgress) {
-            try {
-                const srvRes = await fetch('https://api.gofile.io/servers');
-                const srvJson = await srvRes.json();
-                if(srvJson.status !== 'ok') throw new Error("Gofile offline");
-                const server = srvJson.data.servers[0].name;
+        async function uploadToSecurityBackend(file, metadata, onProgress) {
+            const formData = new FormData();
+            formData.append('file', file, file.name);
 
-                const formData = new FormData();
-                formData.append('file', file);
-                
-                return await new Promise((resolve, reject) => {
-                    const xhr = new XMLHttpRequest();
-                    xhr.open('POST', `https://${server}.gofile.io/contents/uploadfile`);
-                    xhr.upload.onprogress = onProgress;
-                    xhr.onload = () => {
-                        if (xhr.status === 200) {
-                            const res = JSON.parse(xhr.responseText);
-                            if(res.status === 'ok') resolve(res.data.downloadPage);
-                            else reject(new Error(res.status));
-                        } else reject(new Error(xhr.status));
-                    };
-                    xhr.onerror = () => reject(new Error("Network Error"));
-                    xhr.send(formData);
-                });
-            } catch (err) {
-                const formData = new FormData();
-                formData.append('file', file);
-                return await new Promise((resolve, reject) => {
-                    const xhr = new XMLHttpRequest();
-                    xhr.open('POST', 'https://tmpfiles.org/api/v1/upload');
-                    xhr.upload.onprogress = onProgress;
-                    xhr.onload = () => {
-                        if (xhr.status === 200) {
-                            const res = JSON.parse(xhr.responseText);
-                            if(res.status === 'success') resolve(res.data.url.replace('tmpfiles.org/', 'tmpfiles.org/dl/'));
-                            else reject(new Error("Fallback failed"));
-                        } else reject(new Error(xhr.status));
-                    };
-                    xhr.onerror = () => reject(new Error("All hosts blocked"));
-                    xhr.send(formData);
-                });
-            }
+            Object.entries(metadata || {}).forEach(([key, value]) => {
+                if (value !== undefined && value !== null && value !== '') formData.append(key, value);
+            });
+
+            return await new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                xhr.open('POST', buildSecurityBackendUrl('/api/uploads/scan'));
+                xhr.upload.onprogress = onProgress;
+                xhr.onload = () => {
+                    let payload = null;
+                    try {
+                        payload = JSON.parse(xhr.responseText || '{}');
+                    } catch (error) {
+                        payload = null;
+                    }
+
+                    if (xhr.status >= 200 && xhr.status < 300 && payload) {
+                        resolve(payload);
+                        return;
+                    }
+
+                    const detailedReason = payload?.findings?.find(f => f.reason)?.reason || payload?.error || `Security backend rejected the upload (${xhr.status}).`;
+                    const rejection = new Error(detailedReason);
+                    rejection.payload = payload;
+                    reject(rejection);
+                };
+                xhr.onerror = () => reject(new Error("Could not reach the security backend. Start the backend service and try again."));
+                xhr.send(formData);
+            });
         }
 
         window.handleSubmission = async (e) => {
@@ -820,21 +867,34 @@
 
                 let finalFiles = [], uploadCount = state.draftFiles.filter(f => f.inputType === 'upload').length, processedCount = 0;
                 const requiresReapproval = auditResult.requiresReapproval;
+                const backendSubmissionMeta = {
+                    displayTitle: title,
+                    category: cat,
+                    uploaderId: state.user.uid,
+                    uploaderEmail: state.user.email || ''
+                };
 
                 // Handle Cover Image Upload
                 let finalImgUrl = '';
+                let finalImageScan = state.originalItem?.imageScan || null;
                 if (state.draftImage.inputType === 'url') {
                     finalImgUrl = state.draftImage.url;
+                    if (finalImgUrl !== (state.originalItem?.imageUrl || '')) finalImageScan = null;
                 } else if (state.draftImage.inputType === 'upload' && state.draftImage.file) {
-                    statText.innerText = `Encrypting Cover Image...`;
+                    statText.innerText = `Uploading cover image for backend scan...`;
                     uploadCount++; // Count cover image as an upload for progress bar
-                    finalImgUrl = await uploadToFreeHost(state.draftImage.file, (e) => {
+                    const imageScanResult = await uploadToSecurityBackend(state.draftImage.file, {
+                        ...backendSubmissionMeta,
+                        fileRole: 'cover_image'
+                    }, (e) => {
                         if (e.lengthComputable) {
                             const prog = (((processedCount * 100) + ((e.loaded / e.total) * 100)) / uploadCount);
                             pBar.style.width = prog + '%';
                             pText.innerText = Math.round(prog) + '%';
                         }
                     });
+                    finalImgUrl = getSecurityBackendFileUrl(imageScanResult.id);
+                    finalImageScan = buildBackendScanMeta(imageScanResult);
                     processedCount++;
                 } else {
                     finalImgUrl = state.draftImage.url; // fallback to existing
@@ -845,18 +905,26 @@
                     let fileData = { name: draft.name, type: draft.type };
                     if (draft.inputType === 'url') {
                         fileData.url = draft.url;
+                        if (draft.backendScan) fileData.backendScan = draft.backendScan;
                     } else {
-                        statText.innerText = `Encrypting: ${draft.file.name}...`;
+                        statText.innerText = `Uploading ${draft.file.name} for backend scan...`;
                         const onProgress = (e) => {
                             if (e.lengthComputable) {
                                 const prog = (((processedCount * 100) + ((e.loaded / e.total) * 100)) / uploadCount);
                                 pBar.style.width = prog + '%'; 
                                 pText.innerText = Math.round(prog) + '%';
                                 const mb = Math.round((e.loaded/1024/1024)*10)/10;
-                                statText.innerText = `Transferring: ${mb} MB...`;
+                                statText.innerText = `Sending to security backend: ${mb} MB...`;
                             }
                         };
-                        fileData.url = await uploadToFreeHost(draft.file, onProgress);
+                        const scanResult = await uploadToSecurityBackend(draft.file, {
+                            ...backendSubmissionMeta,
+                            fileRole: 'attachment',
+                            fileLabel: draft.name,
+                            fileCategory: draft.type
+                        }, onProgress);
+                        fileData.url = getSecurityBackendFileUrl(scanResult.id);
+                        fileData.backendScan = buildBackendScanMeta(scanResult);
                         processedCount++;
                     }
                     finalFiles.push(fileData);
@@ -878,6 +946,7 @@
                     title, 
                     description: desc, 
                     imageUrl: finalImgUrl, 
+                    imageScan: finalImageScan,
                     submitterEmail: state.user.email,
                     submitterUid: state.user.uid,
                     folderId: folderId,
@@ -890,14 +959,14 @@
                     await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', state.editingItemId), docData);
                     
                     if (requiresReapproval && state.originalItem.status === 'approved') {
-                        showToast("Updates saved! Files were modified, so it has been sent for re-approval.");
+                        showToast("Updates saved! Changed files were sent back to quarantine review and need admin release.");
                     } else {
                         showToast("Text/Metadata updated successfully!");
                     }
                 } else {
                     docData.createdAt = serverTimestamp();
                     await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items'), docData);
-                    showToast(finalStatus === 'approved' ? "Uploaded successfully!" : "Submitted to workspace! Pending global public view.");
+                    showToast(finalStatus === 'approved' ? "Uploaded successfully!" : "Submitted to quarantine review. An admin must release it before public download.");
                 }
                 
                 // Route back gracefully
