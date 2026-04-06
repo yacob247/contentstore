@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nexus Content Hub</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #1f2937; }
+        ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #6b7280; }
+        .fade-in { animation: fadeIn 0.3s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .line-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 font-sans min-h-screen flex flex-col">
+
+    <!-- Navigation -->
+    <nav class="bg-gray-800 border-b border-gray-700 sticky top-0 z-40 shadow-lg">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center gap-3 cursor-pointer" onclick="navigate('home')">
+                    <i class="fa-solid fa-layer-group text-blue-500 text-2xl"></i>
+                    <span class="font-bold text-xl tracking-tight text-white">Nexus<span class="text-blue-500">Hub</span></span>
+                </div>
+                <div class="flex items-center gap-2 sm:gap-4 overflow-x-auto hide-scrollbar">
+                    <button onclick="navigate('home')" class="nav-btn text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium transition-colors" data-view="home">Mainstreams</button>
+                    <button onclick="navigate('submit')" class="nav-btn text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium transition-colors" data-view="submit">Suggest / Upload</button>
+                    <div id="auth-nav-section" class="border-l border-gray-700 pl-2 sm:pl-4 flex items-center gap-3 ml-2">
+                        <!-- Rendered dynamically -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content Area -->
+    <main id="app-content" class="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full"></main>
+
+    <!-- Global Modals & Toasts -->
+    <div id="modal-container" onclick="if(event.target === this) closeModal()" class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 hidden opacity-0 transition-opacity duration-300 backdrop-blur-sm p-4"></div>
+    <div id="toast-container" class="fixed bottom-4 right-4 z-50 flex flex-col gap-2"></div>
+    
+    <!-- Upload Progress -->
+    <div id="upload-overlay" class="fixed inset-0 bg-gray-900/90 flex flex-col items-center justify-center z-[60] hidden backdrop-blur-sm transition-opacity duration-300">
+        <div class="bg-gray-800 p-8 rounded-2xl shadow-2xl border border-gray-700 w-full max-w-md text-center">
+            <i class="fa-solid fa-cloud-arrow-up text-5xl text-blue-500 mb-4 animate-bounce"></i>
+            <h3 class="text-2xl font-bold text-white mb-2">Uploading Files...</h3>
+            <p id="upload-status-text" class="text-gray-400 mb-6">Processing your submission</p>
+            <div class="w-full bg-gray-700 rounded-full h-4 mb-2 overflow-hidden border border-gray-600">
+                <div id="upload-progress-bar" class="bg-blue-500 h-4 rounded-full transition-all duration-300" style="width: 0%"></div>
+            </div>
+            <p id="upload-percentage" class="text-sm font-bold text-blue-400">0%</p>
+        </div>
+    </div>
+
+    <!-- Logic -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getStorage, ref, uploadBytesResumable, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
+
+        const ALLOWED_EXTENSIONS = ".pdf,.epub,.txt,.html,.docx,.csv,.json,.xlsx,.pptx,.mp4,.mov,.avi,.mkv,.mp3,.wav,.jpg,.png,.gif,.zip,.rar,.gz,.sqlite,.sql,.dbf,.iso";
+
+        const state = {
+            currentView: 'home',
+            currentCategory: 'all',
+            items: [],
+            user: null,
+            isLoading: true,
+            draftFiles: []
+        };
+
+        const CATEGORIES = {
+            'collection': { label: 'Collections (Mixed)', icon: 'fa-layer-group', color: 'text-purple-500' },
+            'document': { label: 'Texts & Documents', icon: 'fa-book', color: 'text-orange-400' },
+            'video': { label: 'Movies & Video', icon: 'fa-film', color: 'text-red-500' },
+            'audio': { label: 'Audio & Music', icon: 'fa-music', color: 'text-pink-400' },
+            'image': { label: 'Images & Photos', icon: 'fa-image', color: 'text-green-400' },
+            'software': { label: 'Software & Apps', icon: 'fa-laptop-code', color: 'text-cyan-400' },
+            'archive': { label: 'Archives', icon: 'fa-file-zipper', color: 'text-yellow-500' },
+            'other': { label: 'Misc / Other', icon: 'fa-file', color: 'text-gray-400' }
+        };
+
+        let app, auth, db, storage, appId;
+
+        async function init() {
+            renderLoading();
+            try {
+                const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+                    apiKey: "AIzaSyB-3kAk-lMT3jTny2YIs2R1_0mG-tJlmJI",
+                    authDomain: "puzzlesapp.firebaseapp.com",
+                    projectId: "puzzlesapp",
+                    storageBucket: "puzzlesapp.firebasestorage.app"
+                };            
+                app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+                storage = getStorage(app);
+                appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                onAuthStateChanged(auth, (user) => {
+                    state.user = user;
+                    updateAuthUI();
+                    if (user) setupDataListener();
+                });
+            } catch (error) {
+                showToast("Failed to connect to backend.", "error");
+            }
+        }
+
+        function setupDataListener() {
+            if (!state.user) return;
+            const itemsRef = collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items');
+            
+            onSnapshot(itemsRef, (snapshot) => {
+                // Users ONLY see APPROVED items in their lists
+                state.items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(i => i.status === 'approved');
+                state.isLoading = false;
+                render();
+            }, (error) => {
+                console.error("Data fetch error:", error);
+            });
+        }
+
+        window.navigate = (view) => {
+            if (view === 'submit' && (!state.user || state.user.isAnonymous)) {
+                showAuthModal('login');
+                return;
+            }
+            state.currentView = view;
+            if(view === 'submit') state.draftFiles = [];
+            document.querySelectorAll('.nav-btn').forEach(btn => {
+                if(btn.dataset.view === state.currentView) {
+                    btn.classList.add('bg-gray-700', 'text-white');
+                    btn.classList.remove('text-gray-300');
+                } else {
+                    btn.classList.remove('bg-gray-700', 'text-white');
+                    btn.classList.add('text-gray-300');
+                }
+            });
+            render();
+        };
+
+        window.setCategory = (cat) => { state.currentCategory = cat; render(); };
+
+        function updateAuthUI() {
+            const authSection = document.getElementById('auth-nav-section');
+            if (state.user && !state.user.isAnonymous) {
+                authSection.innerHTML = `
+                    <div class="flex flex-col text-right hidden sm:block">
+                        <span class="text-xs text-gray-400">Logged in</span>
+                        <span class="text-sm font-bold text-white truncate max-w-[120px]" title="${state.user.email}">${state.user.email}</span>
+                    </div>
+                    <button onclick="handleLogout()" class="text-gray-400 hover:text-red-400 transition-colors" title="Sign Out"><i class="fa-solid fa-power-off text-lg"></i></button>
+                `;
+            } else {
+                authSection.innerHTML = `
+                    <button onclick="showAuthModal('login')" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded-lg text-sm font-bold transition-colors shadow">Sign In</button>
+                `;
+            }
+        }
+
+        window.showToast = (message, type = 'success') => {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            const color = type === 'success' ? 'bg-green-600' : 'bg-red-600';
+            toast.className = `${color} text-white px-4 py-3 rounded shadow-lg flex items-center gap-3 transform transition-all duration-300 translate-y-10 opacity-0`;
+            toast.innerHTML = `<span>${message}</span>`;
+            container.appendChild(toast);
+            setTimeout(() => toast.classList.remove('translate-y-10', 'opacity-0'), 10);
+            setTimeout(() => { toast.classList.add('translate-y-10', 'opacity-0'); setTimeout(() => toast.remove(), 300); }, 3000);
+        };
+
+        window.openModal = (htmlContent) => {
+            const modal = document.getElementById('modal-container');
+            modal.innerHTML = htmlContent;
+            modal.classList.remove('hidden');
+            setTimeout(() => modal.classList.remove('opacity-0'), 10);
+        };
+
+        window.closeModal = () => {
+            const modal = document.getElementById('modal-container');
+            modal.classList.add('opacity-0');
+            setTimeout(() => { modal.classList.add('hidden'); modal.innerHTML = ''; }, 300);
+        };
+
+        function getYouTubeId(url) {
+            const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+            const match = url?.match(regExp);
+            return (match && match[2].length === 11) ? match[2] : null;
+        }
+
+        // Auth
+        window.showAuthModal = (mode = 'login') => {
+            openModal(`
+                <div class="bg-gray-800 rounded-2xl w-full max-w-md border border-gray-700 shadow-2xl relative p-8 fade-in">
+                    <button onclick="closeModal()" class="absolute top-4 right-4 text-gray-400 hover:text-white"><i class="fa-solid fa-times text-xl"></i></button>
+                    <h2 class="text-2xl font-bold text-white mb-2 text-center">${mode === 'login' ? 'Welcome Back' : 'Create Account'}</h2>
+                    <p class="text-gray-400 text-sm text-center mb-6">Sign in to share content with the community.</p>
+                    <button onclick="handleGoogleAuth()" class="w-full bg-white text-gray-900 font-bold py-3 px-4 rounded-xl mb-4 flex items-center justify-center gap-3 hover:bg-gray-100 transition shadow">
+                        <img src="https://www.svgrepo.com/show/475656/google-color.svg" class="w-5 h-5"> Continue with Google
+                    </button>
+                    <div class="flex items-center my-4 text-gray-500"><div class="flex-grow border-t border-gray-700"></div><span class="px-3 text-sm font-medium">or email</span><div class="flex-grow border-t border-gray-700"></div></div>
+                    <form onsubmit="handleEmailAuth(event, '${mode}')" class="space-y-4">
+                        <input type="email" id="auth-email" required class="w-full bg-gray-900 border border-gray-600 rounded-lg px-4 py-3 text-white focus:border-blue-500" placeholder="Email">
+                        <input type="password" id="auth-password" required class="w-full bg-gray-900 border border-gray-600 rounded-lg px-4 py-3 text-white focus:border-blue-500" placeholder="Password">
+                        <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl transition mt-2">${mode === 'login' ? 'Sign In' : 'Sign Up'}</button>
+                    </form>
+                    <p class="text-center text-gray-400 mt-6 text-sm">
+                        ${mode === 'login' ? "Don't have an account?" : "Already have an account?"} 
+                        <button onclick="showAuthModal('${mode === 'login' ? 'signup' : 'login'}')" class="text-blue-500 font-bold hover:underline">${mode === 'login' ? 'Sign Up' : 'Sign In'}</button>
+                    </p>
+                </div>
+            `);
+        };
+
+        window.handleGoogleAuth = async () => {
+            try { await signInWithPopup(auth, new GoogleAuthProvider()); closeModal(); showToast("Authenticated!"); } 
+            catch (e) { showToast(e.message, "error"); }
+        };
+
+        window.handleEmailAuth = async (e, mode) => {
+            e.preventDefault();
+            const em = document.getElementById('auth-email').value, pw = document.getElementById('auth-password').value;
+            try {
+                if (mode === 'signup') await createUserWithEmailAndPassword(auth, em, pw);
+                else await signInWithEmailAndPassword(auth, em, pw);
+                closeModal(); showToast("Success!");
+            } catch (e) { showToast(e.message, "error"); }
+        };
+
+        window.handleLogout = async () => {
+            try { await signOut(auth); await signInAnonymously(auth); showToast("Signed out."); if (state.currentView !== 'home') navigate('home'); } 
+            catch (e) { showToast("Error signing out.", "error"); }
+        };
+
+        // Item Modals
+        window.playVideo = (ytId) => {
+            openModal(`
+                <div class="bg-gray-900 rounded-xl w-full max-w-5xl border border-gray-700 shadow-2xl relative overflow-hidden flex flex-col fade-in">
+                    <div class="p-4 flex justify-between items-center border-b border-gray-800 bg-black/50">
+                        <h3 class="text-white font-bold flex items-center"><i class="fa-brands fa-youtube text-red-500 mr-2 text-xl"></i> Now Playing</h3>
+                        <button onclick="closeModal()" class="text-gray-400 hover:text-white transition-colors p-1"><i class="fa-solid fa-times text-2xl"></i></button>
+                    </div>
+                    <div class="relative w-full bg-black" style="padding-top: 56.25%;">
+                        <iframe class="absolute inset-0 w-full h-full" src="https://www.youtube.com/embed/${ytId}?autoplay=1&rel=0" frameborder="0" allowfullscreen></iframe>
+                    </div>
+                </div>
+            `);
+        };
+
+        window.openItemModal = (id) => {
+            const item = state.items.find(i => i.id === id);
+            if (!item) return;
+
+            const imgUrl = item.imageUrl || 'https://via.placeholder.com/800x400/1f2937/4b5563?text=Cover+Art';
+            const catInfo = CATEGORIES[item.category] || CATEGORIES['other'];
+
+            let filesHTML = item.files && item.files.length > 0 
+                ? item.files.map(f => `
+                    <div class="flex items-center justify-between bg-gray-800 border border-gray-700 p-4 rounded-xl mb-3 hover:border-gray-500 transition">
+                        <div class="flex items-center gap-4">
+                            <div class="w-10 h-10 rounded-lg bg-gray-700 flex items-center justify-center ${CATEGORIES[f.type]?.color || 'text-white'} bg-opacity-20"><i class="fa-solid ${CATEGORIES[f.type]?.icon || 'fa-file'} text-lg"></i></div>
+                            <div><h4 class="text-white font-bold truncate max-w-[200px]">${f.name || 'File'}</h4></div>
+                        </div>
+                        <a href="${f.url}" target="_blank" class="bg-blue-600 hover:bg-blue-500 text-white px-5 py-2 rounded-lg font-bold shadow flex items-center gap-2"><i class="fa-solid fa-download"></i> <span class="hidden sm:inline">Access</span></a>
+                    </div>`).join('')
+                : `<p class="text-gray-500 italic p-4 text-center bg-gray-800 rounded-xl">No files attached.</p>`;
+
+            openModal(`
+                <div class="bg-gray-900 rounded-2xl w-full max-w-4xl border border-gray-700 shadow-2xl relative overflow-hidden flex flex-col fade-in max-h-[90vh] overflow-y-auto">
+                    <button onclick="closeModal()" class="absolute top-4 right-4 text-white bg-black/60 rounded-full w-10 h-10 z-10"><i class="fa-solid fa-times"></i></button>
+                    <div class="h-64 sm:h-80 overflow-hidden relative bg-black flex-shrink-0 border-b border-gray-800">
+                        <img src="${imgUrl}" onerror="this.src='https://via.placeholder.com/800x400/1f2937/4b5563?text=Art'" class="w-full h-full object-cover opacity-50 blur-[2px]">
+                        <div class="absolute inset-0 bg-gradient-to-t from-gray-900 via-gray-900/80 to-transparent"></div>
+                        <div class="absolute bottom-8 left-8 right-8 flex gap-6 items-end">
+                            <div class="flex-grow">
+                                <span class="px-3 py-1 bg-gray-800/80 text-gray-300 text-xs rounded-full uppercase font-bold border border-gray-600 mb-3 inline-flex items-center gap-2"><i class="fa-solid ${catInfo.icon} ${catInfo.color}"></i> ${catInfo.label}</span>
+                                <h2 class="text-3xl sm:text-5xl font-extrabold text-white">${item.title}</h2>
+                                <p class="text-gray-400 mt-2"><i class="fa-solid fa-user-circle"></i> Uploaded by ${item.submitterEmail || 'Community'}</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="p-8 flex flex-col lg:flex-row gap-8">
+                        <div class="lg:w-1/3"><div class="bg-gray-800/50 p-6 rounded-2xl border border-gray-700 h-full"><h3 class="text-xl font-bold text-white mb-4 border-b border-gray-700 pb-2">Description</h3><p class="text-gray-300 text-sm whitespace-pre-wrap">${item.description}</p></div></div>
+                        <div class="lg:w-2/3"><h3 class="text-2xl font-bold text-white mb-4"><i class="fa-solid fa-folder-open text-blue-500"></i> Available Files</h3><div class="space-y-3">${filesHTML}</div></div>
+                    </div>
+                </div>
+            `);
+        };
+
+        // Render Routing
+        function renderLoading() { document.getElementById('app-content').innerHTML = `<div class="flex justify-center items-center h-64"><i class="fa-solid fa-circle-notch fa-spin text-4xl text-blue-500"></i></div>`; }
+
+        function render() {
+            if (state.isLoading) return;
+            const contentDiv = document.getElementById('app-content');
+            if (state.currentView === 'home') contentDiv.innerHTML = getHomeHTML();
+            else if (state.currentView === 'submit') contentDiv.innerHTML = getSubmitHTML();
+        }
+
+        function getHomeHTML() {
+            let tabsHTML = `<div class="flex overflow-x-auto gap-2 pb-2 mb-8 border-b border-gray-800">
+                <button onclick="setCategory('all')" class="px-5 py-2.5 rounded-t-lg font-bold ${state.currentCategory === 'all' ? 'bg-gray-800 text-white border-b-2 border-blue-500' : 'text-gray-400 hover:bg-gray-800'}">All Content</button>`;
+            
+            Object.entries(CATEGORIES).forEach(([key, info]) => {
+                const count = state.items.filter(i => i.category === key).length;
+                if (count > 0 || state.currentCategory === key) {
+                    tabsHTML += `<button onclick="setCategory('${key}')" class="px-5 py-2.5 rounded-t-lg font-bold flex items-center gap-2 ${state.currentCategory === key ? 'bg-gray-800 text-white border-b-2 border-blue-500' : 'text-gray-400 hover:bg-gray-800'}"><i class="fa-solid ${info.icon} ${info.color}"></i> ${info.label} <span class="bg-gray-700 text-xs px-2 py-0.5 rounded-full text-gray-300">${count}</span></button>`;
+                }
+            });
+            tabsHTML += `</div>`;
+
+            const displayItems = state.currentCategory === 'all' ? state.items : state.items.filter(i => i.category === state.currentCategory);
+
+            if (displayItems.length === 0) {
+                return tabsHTML + `
+                    <div class="text-center py-20 fade-in bg-gray-800/50 rounded-2xl border border-gray-800">
+                        <i class="fa-solid fa-ghost text-6xl text-gray-600 mb-4"></i>
+                        <h2 class="text-2xl font-bold text-gray-400">No content in this stream</h2>
+                        <button onclick="navigate('submit')" class="mt-6 bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-full font-medium transition-colors">Submit Content</button>
+                    </div>
+                `;
+            }
+
+            const renderCard = (item) => {
+                let imgUrl = item.imageUrl || 'https://via.placeholder.com/400x225/1f2937/4b5563?text=No+Image';
+                const catInfo = CATEGORIES[item.category] || CATEGORIES['collection'];
+                let isVideo = item.category === 'video';
+                let primaryVideoId = isVideo && item.files?.length ? getYouTubeId(item.files[0].url) : null;
+                if (primaryVideoId) imgUrl = `https://img.youtube.com/vi/${primaryVideoId}/hqdefault.jpg`;
+
+                return `
+                    <div class="bg-gray-800 rounded-xl overflow-hidden shadow-lg border border-gray-700 hover:border-gray-500 transition-all duration-300 flex flex-col fade-in group cursor-pointer" onclick="${primaryVideoId ? `playVideo('${primaryVideoId}')` : `openItemModal('${item.id}')`}">
+                        <div class="h-48 overflow-hidden relative">
+                            <div class="absolute inset-0 bg-black/20 group-hover:bg-transparent z-10"></div>
+                            ${primaryVideoId ? `<div class="absolute inset-0 flex items-center justify-center z-20"><div class="w-12 h-12 bg-red-600 rounded-full flex items-center justify-center shadow-lg group-hover:scale-110 transition"><i class="fa-solid fa-play text-white ml-1"></i></div></div>` : ''}
+                            <div class="absolute top-3 right-3 z-20"><span class="px-2 py-1 bg-gray-900/90 text-[10px] rounded uppercase font-bold text-gray-200 border border-gray-700 backdrop-blur"><i class="fa-solid ${catInfo.icon} ${catInfo.color}"></i> ${catInfo.label}</span></div>
+                            <img src="${imgUrl}" onerror="this.src='https://via.placeholder.com/400x225/1f2937/4b5563?text=Image+Not+Found'" class="w-full h-full object-cover group-hover:scale-105 transition duration-500">
+                        </div>
+                        <div class="p-5 flex flex-col flex-grow">
+                            <h3 class="text-xl font-bold mb-2 text-white truncate">${item.title}</h3>
+                            <p class="text-gray-400 text-sm mb-4 line-clamp-2 flex-grow">${item.description}</p>
+                            <div class="mt-auto border-t border-gray-700 pt-3 flex justify-between items-center text-sm">
+                                <span class="text-gray-500"><i class="fa-solid fa-file-lines mr-1"></i> ${item.files?.length || 0} Files</span>
+                                <span class="text-blue-400 font-bold group-hover:text-blue-300">View <i class="fa-solid fa-arrow-right ml-1"></i></span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            };
+
+            return tabsHTML + `<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">${displayItems.map(renderCard).join('')}</div>`;
+        }
+
+        // Uploading Views
+        window.addDraftFile = () => { state.draftFiles.push({ name: '', type: 'archive', inputType: 'upload', url: '', file: null, id: Date.now() }); renderDrafts(); };
+        window.removeDraftFile = (id) => { state.draftFiles = state.draftFiles.filter(f => f.id !== id); renderDrafts(); };
+        window.updateDraft = (id, f, v) => { const x = state.draftFiles.find(i=>i.id===id); if(x) x[f]=v; if(f==='inputType') renderDrafts(); };
+        window.handleFile = (id, el) => { const x = state.draftFiles.find(i=>i.id===id); if(x && el.files.length>0) x.file = el.files[0]; };
+
+        function renderDrafts() {
+            const container = document.getElementById('draft-files-container');
+            if(!container) return;
+            if (state.draftFiles.length === 0) { container.innerHTML = `<div class="text-center p-6 border-2 border-dashed border-gray-700 rounded-xl text-gray-500 bg-gray-800/30">No files. Click "Add File".</div>`; return; }
+            container.innerHTML = state.draftFiles.map(df => `
+                <div class="bg-gray-900 border border-gray-700 p-4 rounded-xl relative group">
+                    <button type="button" onclick="removeDraftFile(${df.id})" class="absolute top-2 right-2 text-gray-500 hover:text-red-500 w-8 h-8 rounded"><i class="fa-solid fa-trash"></i></button>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-3 pr-8">
+                        <div><label class="block text-xs font-bold text-gray-400 uppercase mb-1">File Name</label><input type="text" value="${df.name}" onchange="updateDraft(${df.id}, 'name', this.value)" required class="w-full bg-gray-800 border border-gray-600 rounded p-2 text-white text-sm"></div>
+                        <div><label class="block text-xs font-bold text-gray-400 uppercase mb-1">File Type</label><select onchange="updateDraft(${df.id}, 'type', this.value)" class="w-full bg-gray-800 border border-gray-600 rounded p-2 text-white text-sm">${Object.entries(CATEGORIES).map(([k,v]) => `<option value="${k}" ${df.type===k?'selected':''}>${v.label}</option>`).join('')}</select></div>
+                    </div>
+                    <div class="bg-gray-800/50 p-3 rounded-lg border border-gray-700">
+                        <div class="flex gap-4 mb-3 text-sm">
+                            <label class="flex items-center gap-2 cursor-pointer text-gray-300"><input type="radio" name="it_${df.id}" value="upload" ${df.inputType==='upload'?'checked':''} onchange="updateDraft(${df.id}, 'inputType', 'upload')" class="text-blue-500"> Direct Upload</label>
+                            <label class="flex items-center gap-2 cursor-pointer text-gray-300"><input type="radio" name="it_${df.id}" value="url" ${df.inputType==='url'?'checked':''} onchange="updateDraft(${df.id}, 'inputType', 'url')" class="text-blue-500"> Link URL</label>
+                        </div>
+                        ${df.inputType === 'url' ? `<input type="url" value="${df.url}" onchange="updateDraft(${df.id}, 'url', this.value)" required class="w-full bg-gray-800 border-gray-600 rounded p-2 text-white text-sm" placeholder="External URL">` : `<input type="file" onchange="handleFile(${df.id}, this)" required class="w-full text-sm text-gray-400">`}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function getSubmitHTML() {
+            if(state.draftFiles.length === 0) state.draftFiles.push({ name: '', type: 'archive', inputType: 'upload', url: '', file: null, id: Date.now() });
+            setTimeout(renderDrafts, 0);
+            return `
+                <div class="max-w-3xl mx-auto fade-in pb-10">
+                    <form onsubmit="handleSubmission(event)" class="bg-gray-800 p-8 rounded-2xl shadow-xl border border-gray-700 space-y-6">
+                        <div class="text-center mb-6"><h1 class="text-3xl font-bold text-white"><i class="fa-solid fa-cloud-arrow-up text-blue-500 mr-3"></i>Upload to Hub</h1><p class="text-gray-400 mt-2 text-sm">All user submissions are reviewed by an Admin unless they only contain direct image/video links.</p></div>
+                        <div class="bg-gray-900 p-5 rounded-xl border border-gray-700 space-y-4">
+                            <h3 class="text-lg font-bold text-white border-b border-gray-800 pb-2">Main Details</h3>
+                            <div><label class="block text-sm font-bold text-gray-400 uppercase mb-2">Category</label><select id="sub-cat" class="w-full bg-gray-800 border-gray-600 rounded-lg p-2.5 text-white">${Object.entries(CATEGORIES).map(([k,v]) => `<option value="${k}">${v.label}</option>`).join('')}</select></div>
+                            <div><label class="block text-sm font-bold text-gray-400 uppercase mb-2">Title</label><input type="text" id="sub-title" required class="w-full bg-gray-800 border-gray-600 rounded-lg p-2.5 text-white"></div>
+                            <div><label class="block text-sm font-bold text-gray-400 uppercase mb-2">Description</label><textarea id="sub-desc" required rows="3" class="w-full bg-gray-800 border-gray-600 rounded-lg p-2.5 text-white"></textarea></div>
+                            <div><label class="block text-sm font-bold text-gray-400 uppercase mb-2">Cover Image URL (Optional)</label><input type="url" id="sub-img" class="w-full bg-gray-800 border-gray-600 rounded-lg p-2.5 text-white"></div>
+                        </div>
+                        <div class="bg-gray-800 p-5 rounded-xl border border-gray-700 relative">
+                            <div class="flex justify-between items-center border-b border-gray-700 pb-2"><h3 class="text-lg font-bold text-white">Attached Files</h3><button type="button" onclick="addDraftFile()" class="bg-gray-700 text-white px-3 py-1.5 rounded-lg text-sm font-bold"><i class="fa-solid fa-plus"></i> Add File</button></div>
+                            <div id="draft-files-container" class="space-y-4 mt-4"></div>
+                        </div>
+                        <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl text-lg shadow-xl"><i class="fa-solid fa-paper-plane mr-2"></i> Submit for Review</button>
+                    </form>
+                </div>
+            `;
+        }
+
+        window.handleSubmission = async (e) => {
+            e.preventDefault();
+            if (!state.user || state.user.isAnonymous) return showToast("You must log in.", "error");
+            if (state.draftFiles.length === 0) return showToast("Add at least one file.", "error");
+
+            for(let f of state.draftFiles) {
+                if(!f.name.trim()) return showToast("Files must have names.", "error");
+                if(f.inputType === 'url' && !f.url.trim()) return showToast("Provide URLs.", "error");
+                if(f.inputType === 'upload' && !f.file) return showToast("Select files for upload.", "error");
+            }
+
+            const cat = document.getElementById('sub-cat').value;
+            const title = document.getElementById('sub-title').value.trim();
+            const desc = document.getElementById('sub-desc').value.trim();
+            const img = document.getElementById('sub-img').value.trim();
+
+            e.target.querySelector('button[type="submit"]').disabled = true;
+            const overlay = document.getElementById('upload-overlay'), pBar = document.getElementById('upload-progress-bar'), pText = document.getElementById('upload-percentage'), statText = document.getElementById('upload-status-text');
+
+            try {
+                let finalFiles = [], uploadCount = state.draftFiles.filter(f => f.inputType === 'upload').length, processedCount = 0;
+                let isAutoApprove = true;
+                const mediaExts = ['jpg','png','gif','mp4','mov','avi','mkv'];
+
+                if (uploadCount > 0) overlay.classList.remove('hidden');
+
+                for (let draft of state.draftFiles) {
+                    let fileData = { name: draft.name, type: draft.type };
+                    if (draft.inputType === 'url') {
+                        fileData.url = draft.url;
+                        if (!getYouTubeId(fileData.url) && !/\.(jpeg|jpg|gif|png)$/i.test(fileData.url)) isAutoApprove = false;
+                    } else {
+                        const ext = draft.file.name.match(/\.([^.]+)$/)?.[1].toLowerCase() || '';
+                        if (!mediaExts.includes(ext)) isAutoApprove = false;
+
+                        statText.innerText = `Uploading: ${draft.file.name}...`;
+                        const fileRef = ref(storage, `artifacts/${appId}/uploads/${Date.now()}_${draft.file.name}`);
+                        const uploadTask = uploadBytesResumable(fileRef, draft.file);
+                        
+                        await new Promise((resolve, reject) => {
+                            uploadTask.on('state_changed', 
+                                (snap) => {
+                                    const prog = (((processedCount * 100) + ((snap.bytesTransferred / snap.totalBytes) * 100)) / uploadCount);
+                                    pBar.style.width = prog + '%'; pText.innerText = Math.round(prog) + '%';
+                                }, 
+                                reject, 
+                                async () => { fileData.url = await getDownloadURL(uploadTask.snapshot.ref); resolve(); }
+                            );
+                        });
+                        processedCount++;
+                    }
+                    finalFiles.push(fileData);
+                }
+
+                const finalStatus = isAutoApprove ? 'approved' : 'pending';
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items'), {
+                    category: cat, title, description: desc, imageUrl: img, submitterEmail: state.user.email, files: finalFiles, status: finalStatus, createdAt: serverTimestamp()
+                });
+                
+                showToast(finalStatus === 'approved' ? "Media auto-approved! Added to hub." : "Submitted! Awaiting Admin review.");
+                navigate('home');
+            } catch (error) { showToast("Upload failed: " + error.message, "error"); } 
+            finally {
+                e.target.querySelector('button[type="submit"]').disabled = false;
+                overlay.classList.add('hidden');
+                pBar.style.width = '0%'; pText.innerText = '0%';
+            }
+        };
+
+        window.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+</html>
