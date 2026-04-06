@@ -6,6 +6,7 @@
         let db, auth, currentTab = 'dashboard';
         let adminItems = []; // Store fetched items
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'infinite-nexus-v1';
+        const SECURITY_BACKEND_BASE_URL = (typeof __security_backend_url !== 'undefined' ? __security_backend_url : 'http://127.0.0.1:8787').replace(/\/+$/, '');
 
         const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
           apiKey: "AIzaSyB-3kAk-lMT3jTny2YIs2R1_0mG-tJlmJI",
@@ -106,9 +107,162 @@
             else renderUpload();
         }
 
+        function buildSecurityBackendUrl(path) {
+            return `${SECURITY_BACKEND_BASE_URL}${path}`;
+        }
+
+        function getSecurityBackendReportUrl(scanId) {
+            return buildSecurityBackendUrl(`/api/uploads/report/${scanId}`);
+        }
+
+        function getSecurityBackendFileUrl(scanId) {
+            return buildSecurityBackendUrl(`/api/uploads/${scanId}/file`);
+        }
+
+        function getItemById(id) {
+            return adminItems.find(i => i.id === id) || null;
+        }
+
+        function collectBackendScanIds(item) {
+            const entries = [];
+
+            if (item?.imageScan?.id) {
+                entries.push({ scanId: item.imageScan.id, label: 'Cover image' });
+            }
+
+            (item?.files || []).forEach((file, index) => {
+                if (file?.backendScan?.id) {
+                    entries.push({
+                        scanId: file.backendScan.id,
+                        label: file.name || `File ${index + 1}`
+                    });
+                }
+            });
+
+            return entries;
+        }
+
+        async function callSecurityBackend(path, method, body) {
+            const response = await fetch(buildSecurityBackendUrl(path), {
+                method,
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: body ? JSON.stringify(body) : undefined
+            });
+
+            let payload = null;
+            try {
+                payload = await response.json();
+            } catch (error) {
+                payload = null;
+            }
+
+            if (!response.ok) {
+                throw new Error(payload?.error || `Security backend request failed (${response.status}).`);
+            }
+
+            return payload;
+        }
+
+        function buildBackendScanMetaFromReport(report) {
+            if (!report?.id) return null;
+            return {
+                id: report.id,
+                status: report.status,
+                verdict: report.verdict,
+                reportUrl: getSecurityBackendReportUrl(report.id),
+                fileUrl: getSecurityBackendFileUrl(report.id),
+                findings: (report.findings || []).map(finding => ({
+                    kind: finding.kind || '',
+                    severity: finding.severity || '',
+                    reason: finding.reason || ''
+                }))
+            };
+        }
+
+        async function uploadToSecurityBackend(file, metadata, updateStatusFn) {
+            const formData = new FormData();
+            formData.append('file', file, file.name);
+
+            Object.entries(metadata || {}).forEach(([key, value]) => {
+                if (value !== undefined && value !== null && value !== '') formData.append(key, value);
+            });
+
+            return await new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                xhr.open('POST', buildSecurityBackendUrl('/api/uploads/scan'));
+
+                xhr.upload.onprogress = (e) => {
+                    if (e.lengthComputable) {
+                        const percent = 10 + ((e.loaded / e.total) * 75);
+                        const mbLoaded = Math.round((e.loaded / 1024 / 1024) * 10) / 10;
+                        const mbTotal = Math.round((e.total / 1024 / 1024) * 10) / 10;
+                        updateStatusFn(percent, `Sending to security backend: ${mbLoaded}MB / ${mbTotal}MB`);
+                    }
+                };
+
+                xhr.onload = () => {
+                    let payload = null;
+                    try {
+                        payload = JSON.parse(xhr.responseText || '{}');
+                    } catch (error) {
+                        payload = null;
+                    }
+
+                    if (xhr.status >= 200 && xhr.status < 300 && payload) {
+                        resolve(payload);
+                        return;
+                    }
+
+                    const detailedReason = payload?.findings?.find(f => f.reason)?.reason || payload?.error || `Security backend rejected the upload (${xhr.status}).`;
+                    reject(new Error(detailedReason));
+                };
+
+                xhr.onerror = () => reject(new Error("Could not reach the security backend."));
+                xhr.send(formData);
+            });
+        }
+
+        async function releaseItemSecurityAssets(item) {
+            const scans = collectBackendScanIds(item);
+            for (const scan of scans) {
+                await callSecurityBackend(`/api/uploads/${scan.scanId}/release`, 'POST', { actor: 'admin-panel' });
+            }
+            return scans.length;
+        }
+
+        async function rejectItemSecurityAssets(item) {
+            const scans = collectBackendScanIds(item);
+            for (const scan of scans) {
+                await callSecurityBackend(`/api/uploads/${scan.scanId}/reject`, 'POST', {
+                    actor: 'admin-panel',
+                    reason: 'Rejected by admin moderation'
+                });
+            }
+            return scans.length;
+        }
+
         // --- Admin Controls & Data Management ---
         window.updateStatus = async (id, status) => {
             try {
+                const item = getItemById(id);
+                if (!item) throw new Error("Item not found.");
+
+                if (status === 'approved') {
+                    const releasedCount = await releaseItemSecurityAssets(item);
+                    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id), { status });
+                    showToast(releasedCount > 0 ? `Stream approved and ${releasedCount} quarantined asset(s) released.` : "Stream marked as approved.", 'success');
+                    return;
+                }
+
+                if (status === 'rejected') {
+                    const rejectedCount = await rejectItemSecurityAssets(item);
+                    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id), { status });
+                    showToast(rejectedCount > 0 ? `Stream rejected and ${rejectedCount} quarantined asset(s) were rejected in the backend.` : "Stream marked as rejected.", 'warning');
+                    return;
+                }
+
                 await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id), { status });
                 showToast(`Stream marked as ${status}.`, status === 'approved' ? 'success' : 'warning');
             } catch (e) { showToast("Error updating status.", "error"); }
@@ -164,7 +318,14 @@
 
                         <div class="group">
                             <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Cover Image URL</label>
-                            <input type="url" id="edit-img" value="${(item.imageUrl || '').replace(/"/g, '&quot;')}" class="w-full bg-gray-950 border border-gray-800 rounded-2xl p-4 text-white focus:border-blue-500 outline-none transition" placeholder="https://...">
+                            ${item.imageScan?.id
+                                ? `<div class="bg-gray-950 border border-gray-800 rounded-2xl p-4 text-sm text-gray-300">
+                                    <div class="flex items-center gap-2 text-amber-400 font-bold mb-2"><i class="fa-solid fa-file-shield"></i> Backend-managed cover image</div>
+                                    <p class="text-xs text-gray-500 mb-3">This cover image is served by the security backend after release. To change it, edit the item from the user workspace and upload a new image.</p>
+                                    <input type="text" value="${(item.imageScan.reportUrl || '').replace(/"/g, '&quot;')}" readonly class="w-full bg-black/30 border border-gray-800 rounded-xl p-3 text-xs text-gray-400 outline-none">
+                                  </div>`
+                                : `<input type="url" id="edit-img" value="${(item.imageUrl || '').replace(/"/g, '&quot;')}" class="w-full bg-gray-950 border border-gray-800 rounded-2xl p-4 text-white focus:border-blue-500 outline-none transition" placeholder="https://...">`
+                            }
                         </div>
                         
                         <div class="group bg-gray-900/50 p-4 rounded-2xl border border-gray-800">
@@ -173,7 +334,13 @@
                                 ${(item.files || []).map((f, idx) => `
                                     <div class="relative">
                                         <span class="absolute left-3 top-3 text-[10px] font-bold text-gray-600 uppercase">File ${idx + 1}</span>
-                                        <input type="text" id="edit-file-url-${idx}" value="${(f.url || '').replace(/"/g, '&quot;')}" class="w-full bg-gray-950 border border-gray-800 rounded-xl px-3 pt-7 pb-2 text-sm text-gray-300 focus:border-blue-500 outline-none transition" placeholder="Stream URL">
+                                        ${f.backendScan?.id
+                                            ? `<div class="w-full bg-gray-950 border border-gray-800 rounded-xl px-3 pt-7 pb-3 text-sm text-gray-300">
+                                                <div class="text-amber-400 text-xs font-bold mb-1"><i class="fa-solid fa-file-shield mr-1"></i>Backend-managed file</div>
+                                                <div class="text-xs text-gray-500 break-all">${(f.backendScan.reportUrl || '').replace(/</g, '&lt;')}</div>
+                                              </div>`
+                                            : `<input type="text" id="edit-file-url-${idx}" value="${(f.url || '').replace(/"/g, '&quot;')}" class="w-full bg-gray-950 border border-gray-800 rounded-xl px-3 pt-7 pb-2 text-sm text-gray-300 focus:border-blue-500 outline-none transition" placeholder="Stream URL">`
+                                        }
                                     </div>
                                 `).join('')}
                                 ${(!item.files || item.files.length === 0) ? `<p class="text-xs text-gray-600 italic">No stream links attached to this node.</p>` : ''}
@@ -193,10 +360,12 @@
             const title = document.getElementById('edit-title').value;
             const description = document.getElementById('edit-desc').value;
             const category = document.getElementById('edit-cat').value;
-            const imageUrl = document.getElementById('edit-img').value;
+            const item = adminItems.find(i => i.id === id);
+            if (!item) return;
+            const imageUrlInput = document.getElementById('edit-img');
+            const imageUrl = imageUrlInput ? imageUrlInput.value : (item.imageUrl || '');
             
             // Map over original items array to update URLs
-            const item = adminItems.find(i => i.id === id);
             let updatedFiles = item.files ? [...item.files] : [];
             updatedFiles.forEach((f, idx) => {
                 const urlInput = document.getElementById(`edit-file-url-${idx}`);
@@ -237,6 +406,7 @@
                             <div>
                                 <h3 class="font-bold text-white text-sm truncate max-w-[250px]" title="${i.title.replace(/"/g, '&quot;')}">${i.title}</h3>
                                 <p class="text-[10px] text-gray-500 uppercase tracking-wider">${i.category}</p>
+                                ${collectBackendScanIds(i).length > 0 ? `<p class="text-[10px] text-amber-400 mt-1 uppercase tracking-wider"><i class="fa-solid fa-file-shield mr-1"></i>${collectBackendScanIds(i).length} backend-scanned asset(s)</p>` : ''}
                             </div>
                         </div>
                     </td>
@@ -306,7 +476,7 @@
                             </div>
                             <div>
                                 <h2 class="text-2xl font-bold text-white">Direct Admin Deployment</h2>
-                                <p class="text-gray-500 text-xs">Files bypass Firestore limits using Infinite API endpoints</p>
+                                <p class="text-gray-500 text-xs">Files are scanned by the backend, released from quarantine, then published</p>
                             </div>
                         </div>
                         
@@ -351,75 +521,6 @@
             `;
         }
 
-        // --- Custom uploader bypassing Firebase Storage limits (Kept exactly as requested) ---
-        async function uploadToFreeHost(file, updateStatusFn) {
-            try {
-                updateStatusFn(5, "Connecting to Infinite Hub (Gofile)...");
-                const srvRes = await fetch('https://api.gofile.io/servers');
-                const srvJson = await srvRes.json();
-                if(srvJson.status !== 'ok') throw new Error("Primary server offline");
-                const server = srvJson.data.servers[0].name;
-
-                const formData = new FormData();
-                formData.append('file', file);
-                
-                return await new Promise((resolve, reject) => {
-                    const xhr = new XMLHttpRequest();
-                    xhr.open('POST', `https://${server}.gofile.io/contents/uploadfile`);
-                    
-                    xhr.upload.onprogress = (e) => {
-                        if (e.lengthComputable) {
-                            const percent = 10 + ((e.loaded / e.total) * 80);
-                            const mbLoaded = Math.round((e.loaded / 1024 / 1024) * 10) / 10;
-                            const mbTotal = Math.round((e.total / 1024 / 1024) * 10) / 10;
-                            updateStatusFn(percent, `Streaming: ${mbLoaded}MB / ${mbTotal}MB`);
-                        }
-                    };
-                    
-                    xhr.onload = () => {
-                        if (xhr.status === 200) {
-                            try {
-                                const res = JSON.parse(xhr.responseText);
-                                if(res.status === 'ok') resolve(res.data.downloadPage);
-                                else reject(new Error("Upload rejected: " + res.status));
-                            } catch(e) { reject(e); }
-                        } else reject(new Error("Host error: " + xhr.status));
-                    };
-                    
-                    xhr.onerror = () => reject(new Error("Network CORS blocked."));
-                    xhr.send(formData);
-                });
-            } catch (err) {
-                console.warn("Primary host failed, routing to backup...", err);
-                updateStatusFn(10, "Routing to Backup Host (tmpfiles)...");
-                
-                const formData = new FormData();
-                formData.append('file', file);
-                return await new Promise((resolve, reject) => {
-                    const xhr = new XMLHttpRequest();
-                    xhr.open('POST', 'https://tmpfiles.org/api/v1/upload');
-                    xhr.upload.onprogress = (e) => {
-                        if (e.lengthComputable) {
-                            const percent = 10 + ((e.loaded / e.total) * 85);
-                            updateStatusFn(percent, `Streaming Backup: ${Math.round(percent)}%`);
-                        }
-                    };
-                    xhr.onload = () => {
-                        if (xhr.status === 200) {
-                            try {
-                                const res = JSON.parse(xhr.responseText);
-                                if(res.status === 'success') {
-                                    resolve(res.data.url.replace('tmpfiles.org/', 'tmpfiles.org/dl/'));
-                                } else reject(new Error("Backup failed"));
-                            } catch(e) { reject(e); }
-                        } else reject(new Error("All hosts blocked"));
-                    };
-                    xhr.onerror = () => reject(new Error("All free hosts blocked."));
-                    xhr.send(formData);
-                });
-            }
-        }
-
         window.handleInfiniteUpload = async (e) => {
             e.preventDefault();
             const file = document.getElementById('up-file').files[0];
@@ -444,8 +545,20 @@
             };
 
             try {
-                // Upload without Firebase Storage Limits
-                const publicLink = await uploadToFreeHost(file, updateStatus);
+                updateStatus(5, "Sending file to backend quarantine...");
+                const scanPayload = await uploadToSecurityBackend(file, {
+                    displayTitle: title,
+                    category: cat,
+                    uploaderId: 'admin',
+                    uploaderEmail: 'Admin',
+                    fileRole: 'admin_deployment',
+                    fileLabel: file.name,
+                    fileCategory: cat
+                }, updateStatus);
+
+                updateStatus(88, "Releasing clean admin upload from quarantine...");
+                const releasePayload = await callSecurityBackend(`/api/uploads/${scanPayload.id}/release`, 'POST', { actor: 'admin-upload' });
+                const releasedReport = releasePayload.report;
 
                 updateStatus(95, "Syncing metadata with Database...");
 
@@ -455,20 +568,21 @@
                     description: desc, 
                     category: cat, 
                     imageUrl: img,
-                    status: 'approved', // Auto-approved since it's an admin upload
+                    status: 'approved',
                     submitterEmail: 'Admin',
                     createdAt: serverTimestamp(),
                     files: [{
                         name: file.name,
-                        url: publicLink,
+                        url: getSecurityBackendFileUrl(scanPayload.id),
                         type: cat,
                         size: (file.size / (1024 * 1024)).toFixed(2) + ' MB',
-                        uploadedAt: new Date().toISOString()
+                        uploadedAt: new Date().toISOString(),
+                        backendScan: buildBackendScanMetaFromReport(releasedReport)
                     }]
                 });
 
                 updateStatus(100, "Deployment Successful!");
-                showToast("Stream successfully synced to the Hub!");
+                showToast("Stream scanned, released, and synced to the Hub!");
                 
                 setTimeout(() => {
                     overlay.classList.add('hidden');
