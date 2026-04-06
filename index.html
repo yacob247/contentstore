@@ -179,7 +179,7 @@
                 app = initializeApp(firebaseConfig);
                 auth = getAuth(app);
                 db = getFirestore(app);
-                appId = typeof __app_id !== 'undefined' ? __app_id : 'infinite-Content-v1';
+                appId = typeof __app_id !== 'undefined' ? __app_id : 'infinite-nexus-v1';
 
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     await signInWithCustomToken(auth, __initial_auth_token);
