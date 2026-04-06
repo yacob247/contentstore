@@ -29,8 +29,10 @@
                     <span class="font-bold text-xl tracking-tight text-white">Content<span class="text-blue-500">Store</span></span>
                 </div>
                 <div class="flex items-center gap-2 sm:gap-4 overflow-x-auto hide-scrollbar">
-                    <button onclick="navigate('home')" class="nav-btn text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium transition-colors" data-view="home">Mainstreams</button>
-                    <button onclick="navigate('submit')" class="nav-btn text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium transition-colors" data-view="submit">Suggest / Upload</button>
+                    <button onclick="navigate('home')" class="nav-btn bg-gray-700 text-white hover:text-white px-3 py-2 rounded-md text-sm font-medium transition-colors" data-view="home"><i class="fa-solid fa-house mr-1 hidden sm:inline"></i> Mainstreams</button>
+                    <!-- Private Workspace Tab -->
+                    <button id="nav-workspace" onclick="navigate('my_folders')" class="hidden nav-btn text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium transition-colors" data-view="my_folders"><i class="fa-solid fa-folder-open mr-1 hidden sm:inline"></i> Workspace</button>
+                    <button onclick="state.draftFolderId = null; navigate('submit')" class="nav-btn text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium transition-colors" data-view="submit"><i class="fa-solid fa-cloud-arrow-up mr-1 hidden sm:inline"></i> Upload</button>
                     <div id="auth-nav-section" class="border-l border-gray-700 pl-2 sm:pl-4 flex items-center gap-3 ml-2">
                         <!-- Rendered dynamically -->
                     </div>
@@ -99,7 +101,6 @@
                     </div>
                     <p class="text-xs text-gray-500 mb-2 uppercase font-bold">Secured By</p>
                     <div class="flex flex-wrap gap-3 items-center">
-                        <!-- Placeholder Trust Badges -->
                         <div class="bg-white/10 px-2 py-1 rounded text-xs text-gray-300 border border-gray-600 flex items-center gap-1"><i class="fa-brands fa-stripe text-indigo-400 text-lg"></i> Verified</div>
                         <div class="bg-white/10 px-2 py-1 rounded text-xs text-gray-300 border border-gray-600 flex items-center gap-1"><i class="fa-brands fa-paypal text-blue-400"></i> Secure</div>
                         <div class="bg-white/10 px-2 py-1 rounded text-xs text-gray-300 border border-gray-600 flex items-center gap-1"><i class="fa-solid fa-shield-check text-green-500"></i> McAfee Secure</div>
@@ -133,7 +134,6 @@
         </div>
     </div>
 
-    <!-- Logic -->
    <script type="module" src="app.js"></script>
 </body>
 </html>
