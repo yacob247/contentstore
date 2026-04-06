@@ -1,40 +1,35 @@
-export const SCAN_BYTE_LIMIT = 51200;
+export const SCAN_BYTE_LIMIT = 2097152;
 
 export const SAFE_URL_PROTOCOLS = ["http:", "https:"];
 
-export const RESTRICTED_TERMS = [
-  "porn",
-  "nude",
-  "nsfw",
-  "escort",
-  "camgirl",
-  "onlyfans",
-  "gambling",
-  "casino",
-  "betting",
-  "xxx",
-  "sex",
-  "fuck",
-  "shit",
-  "bitch",
-  "ass",
-  "asshole",
-  "dick",
-  "cock",
-  "pussy",
-  "slut",
-  "whore",
-  "bastard",
-  "cunt",
-  "faggot",
-  "nigger",
-  "retard",
-  "motherfucker",
-  "twat",
-  "cum",
-  "anal",
-  "penis",
-  "vagina"
+export const ALLOW_EXTERNAL_URLS = false;
+
+export const ALWAYS_REQUIRE_MANUAL_REVIEW = true;
+
+export const BLOCKED_FILE_EXTENSIONS = [
+  "exe",
+  "dll",
+  "msi",
+  "scr",
+  "com",
+  "bat",
+  "cmd",
+  "ps1",
+  "psm1",
+  "vbs",
+  "vbe",
+  "wsf",
+  "wsh",
+  "hta",
+  "jar",
+  "apk",
+  "js",
+  "mjs",
+  "cjs",
+  "html",
+  "htm",
+  "svg",
+  "reg"
 ];
 
 export const FILE_HEADER_SIGNATURES = [
@@ -95,6 +90,21 @@ export const MALICIOUS_SIGNATURES = [
     id: "suspicious_transfer",
     patterns: ["certutil -urlcache", "bitsadmin /transfer"],
     message: "it appears to contain suspicious command-line download tooling."
+  },
+  {
+    id: "active_script_execution",
+    patterns: ["<script", "javascript:", "eval(", "new function(", "importscripts("],
+    message: "it appears to contain active script execution code."
+  },
+  {
+    id: "browser_data_access",
+    patterns: ["document.cookie", "localstorage.", "sessionstorage.", "navigator.sendbeacon(", "indexeddb."],
+    message: "it appears to access browser cookies, storage, or stealth data-transfer APIs."
+  },
+  {
+    id: "frame_escape_access",
+    patterns: ["window.parent", "window.top", "top.location", "parent.location", "postmessage("],
+    message: "it appears to interact with parent frames or cross-context browser messaging."
   }
 ];
 
@@ -117,11 +127,12 @@ export const FIX_REQUIRED_SIGNATURES = [
 ];
 
 export const FINDING_TEMPLATES = {
-  restricted_text: 'The {{field}} contains a blocked term: "{{term}}".',
   invalid_local_file: "{{name}} was blocked because {{message}}",
   malicious_signature: "{{name}} was blocked because {{message}}",
   fix_required: "{{name}} needs changes before it can be posted because {{message}}",
+  blocked_extension: "{{name}} was blocked because .{{extension}} files are disabled in strict security mode.",
   unsafe_url_protocol: "{{field}} must use one of these protocols: {{protocols}}.",
+  external_urls_disabled: "{{field}} was blocked because external URLs are disabled in strict security mode.",
   review_only_external_url: "{{field}} uses an external URL that cannot be deeply scanned in the browser, so it will require admin review.",
   review_only_source_change: "{{field}} source changed, so it will require admin review."
 };
