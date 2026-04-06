@@ -27,6 +27,9 @@
         
         .fade-in { animation: fadeIn 0.4s ease-out; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .status-online { background: #10b981; box-shadow: 0 0 8px #10b981; }
     </style>
 </head>
 <body class="min-h-screen">
@@ -54,12 +57,15 @@
                     <div class="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-900/40">
                         <i class="fa-solid fa-infinity text-white text-xl"></i>
                     </div>
-                    <span class="font-extrabold text-2xl tracking-tighter">INFINITE<span class="text-blue-500">HUB</span></span>
+                    <div class="flex flex-col">
+                        <span class="font-extrabold text-xl tracking-tighter leading-none">INFINITE<span class="text-blue-500">HUB</span></span>
+                        <span class="text-[9px] uppercase tracking-[0.2em] text-gray-500 font-bold">Admin Console</span>
+                    </div>
                 </div>
                 <nav class="flex items-center gap-8">
                     <button onclick="setTab('dashboard')" class="text-sm font-semibold hover:text-blue-400 transition" id="tab-dash">Dashboard</button>
                     <button onclick="setTab('upload')" class="bg-blue-600 hover:bg-blue-700 px-6 py-2.5 rounded-xl text-sm font-bold transition shadow-lg">New Deployment</button>
-                    <button onclick="location.reload()" class="text-gray-500 hover:text-red-400"><i class="fa-solid fa-power-off text-lg"></i></button>
+                    <button onclick="location.reload()" class="text-gray-500 hover:text-red-400 transition"><i class="fa-solid fa-power-off text-lg"></i></button>
                 </nav>
             </div>
         </header>
@@ -69,7 +75,7 @@
 
     <!-- Smart Upload Processing Overlay -->
     <div id="processing-overlay" class="fixed inset-0 z-[110] bg-gray-950/95 backdrop-blur-xl flex items-center justify-center hidden p-6">
-        <div class="w-full max-w-lg glass-card p-12 rounded-[3rem] text-center">
+        <div class="w-full max-w-lg glass-card p-12 rounded-[3rem] text-center border-blue-500/20">
             <div class="mb-8">
                 <div class="w-24 h-24 bg-blue-500/10 rounded-full flex items-center justify-center mx-auto mb-4 border border-blue-500/20">
                     <i id="proc-icon" class="fa-solid fa-microchip text-5xl text-blue-500 animate-pulse"></i>
@@ -97,16 +103,28 @@
 
         let db, auth, currentTab = 'dashboard';
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'infinite-nexus-v1';
-        const firebaseConfig = JSON.parse(__firebase_config);
-
+// For Firebase JS SDK v7.20.0 and later, measurementId is optional
+const firebaseConfig = {
+  apiKey: "AIzaSyB-3kAk-lMT3jTny2YIs2R1_0mG-tJlmJI",
+  authDomain: "puzzlesapp.firebaseapp.com",
+  databaseURL: "https://puzzlesapp-default-rtdb.firebaseio.com",
+  projectId: "puzzlesapp",
+  storageBucket: "puzzlesapp.firebasestorage.app",
+  messagingSenderId: "303461259730",
+  appId: "1:303461259730:web:a1790a976b6d58d71dd00b",
+  measurementId: "G-8YEJEBX0NE"
+};
         window.unlockAdmin = (e) => {
             e.preventDefault();
+            // Simple logic for age-appropriate admin access
             if (document.getElementById('admin-key').value === 'password123') {
                 document.getElementById('auth-overlay').classList.add('hidden');
                 document.getElementById('workspace').classList.remove('hidden');
                 document.getElementById('workspace').classList.add('flex');
                 init();
-            } else { alert("Key Denied"); }
+            } else { 
+                alert("Key Denied. Please enter the correct administration password."); 
+            }
         };
 
         async function init() {
@@ -131,29 +149,43 @@
             const container = document.getElementById('main-content');
             if (currentTab === 'dashboard') {
                 container.innerHTML = `<div class="grid gap-6" id="items-grid"></div>`;
+                // Crucial: Use the same path as the user-facing app
                 const q = collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items');
+                
                 onSnapshot(q, snap => {
                     const items = snap.docs.map(d => ({id: d.id, ...d.data()}));
                     document.getElementById('items-grid').innerHTML = `
-                        <div class="flex justify-between items-end mb-4">
+                        <div class="flex justify-between items-end mb-8">
                             <div>
                                 <h2 class="text-3xl font-extrabold">Active Nodes</h2>
-                                <p class="text-gray-500">Live storage data across the cluster</p>
+                                <p class="text-gray-500">Live storage data visible to users</p>
+                            </div>
+                            <div class="flex items-center gap-2 bg-gray-900 px-4 py-2 rounded-full border border-gray-800">
+                                <span class="status-dot status-online"></span>
+                                <span class="text-xs font-bold uppercase tracking-wider text-gray-400">Database Connected</span>
                             </div>
                         </div>
                         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                            ${items.map(i => `
-                                <div class="glass-card p-6 rounded-3xl hover:border-blue-500/50 transition-all group fade-in">
+                            ${items.length === 0 ? `
+                                <div class="col-span-full py-20 text-center border-2 border-dashed border-gray-800 rounded-[2rem]">
+                                    <i class="fa-solid fa-inbox text-4xl text-gray-700 mb-4"></i>
+                                    <p class="text-gray-500 font-medium">No assets deployed yet. Start by creating a new deployment.</p>
+                                </div>
+                            ` : items.map(i => `
+                                <div class="glass-card p-6 rounded-3xl hover:border-blue-500/50 transition-all group fade-in relative overflow-hidden">
                                     <div class="flex justify-between items-start mb-6">
                                         <div class="w-12 h-12 bg-blue-600/10 rounded-2xl flex items-center justify-center text-blue-400 group-hover:scale-110 transition">
                                             <i class="fa-solid ${i.category === 'software' ? 'fa-box-archive' : i.category === 'media' ? 'fa-clapperboard' : 'fa-file-lines'} text-xl"></i>
                                         </div>
-                                        <button onclick="removeItem('${i.id}')" class="text-gray-600 hover:text-red-500 transition"><i class="fa-solid fa-trash-can"></i></button>
+                                        <button onclick="removeItem('${i.id}')" class="w-8 h-8 rounded-full bg-red-500/10 text-red-500 flex items-center justify-center hover:bg-red-500 hover:text-white transition">
+                                            <i class="fa-solid fa-trash-can text-sm"></i>
+                                        </button>
                                     </div>
-                                    <h3 class="font-bold text-xl mb-2">${i.title}</h3>
-                                    <p class="text-gray-500 text-sm mb-6 line-clamp-2">${i.description}</p>
-                                    <div class="flex items-center gap-2 pt-4 border-t border-gray-800">
-                                        <span class="text-[10px] font-bold uppercase tracking-widest text-blue-500">${i.files?.length || 0} Assets Loaded</span>
+                                    <h3 class="font-bold text-xl mb-2 line-clamp-1">${i.title}</h3>
+                                    <p class="text-gray-500 text-sm mb-6 line-clamp-2 h-10">${i.description}</p>
+                                    <div class="flex items-center justify-between pt-4 border-t border-gray-800">
+                                        <span class="text-[10px] font-bold uppercase tracking-widest text-blue-500">${i.files?.length || 1} Asset Stream</span>
+                                        <span class="text-[10px] text-gray-600 font-mono">ID: ${i.id.substring(0,6)}</span>
                                     </div>
                                 </div>
                             `).join('')}
@@ -163,24 +195,46 @@
             } else {
                 container.innerHTML = `
                     <div class="max-w-2xl mx-auto py-4 fade-in">
-                        <form onsubmit="handleInfiniteUpload(event)" class="glass-card p-10 rounded-[2.5rem] space-y-6">
-                            <h2 class="text-2xl font-bold mb-4">New Asset Stream</h2>
+                        <form onsubmit="handleInfiniteUpload(event)" class="glass-card p-10 rounded-[2.5rem] space-y-6 shadow-2xl border-blue-500/10">
+                            <div class="flex items-center gap-4 mb-2">
+                                <div class="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center">
+                                    <i class="fa-solid fa-cloud-arrow-up text-white text-xl"></i>
+                                </div>
+                                <div>
+                                    <h2 class="text-2xl font-bold">New Asset Stream</h2>
+                                    <p class="text-gray-500 text-xs">Files are hosted on the infinite public cluster</p>
+                                </div>
+                            </div>
+                            
                             <div class="space-y-4">
-                                <input id="up-title" required class="w-full bg-black border border-gray-800 rounded-2xl p-5 focus:border-blue-500 outline-none transition" placeholder="Project Title">
-                                <textarea id="up-desc" required class="w-full bg-black border border-gray-800 rounded-2xl p-5 h-32 focus:border-blue-500 outline-none transition" placeholder="Write documentation or description..."></textarea>
-                                <div class="grid grid-cols-2 gap-4">
-                                    <select id="up-cat" class="bg-black border border-gray-800 rounded-2xl p-5 outline-none">
-                                        <option value="software">Software / Code</option>
-                                        <option value="media">Multimedia</option>
-                                        <option value="docs">Documentation</option>
-                                    </select>
-                                    <div class="relative group">
-                                        <div class="absolute inset-0 bg-blue-600 blur opacity-20 group-hover:opacity-40 transition"></div>
-                                        <input type="file" id="up-file" required class="relative w-full bg-black border border-gray-800 rounded-2xl p-4 text-xs text-gray-500 file:bg-blue-600 file:border-0 file:rounded-xl file:px-4 file:py-2 file:text-white file:font-bold file:mr-4">
+                                <div class="group">
+                                    <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Asset Name</label>
+                                    <input id="up-title" required class="w-full bg-gray-950 border border-gray-800 rounded-2xl p-5 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition" placeholder="e.g. Photoshop Portable 2024">
+                                </div>
+
+                                <div class="group">
+                                    <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Description</label>
+                                    <textarea id="up-desc" required class="w-full bg-gray-950 border border-gray-800 rounded-2xl p-5 h-32 focus:border-blue-500 outline-none transition" placeholder="Explain what this file is for..."></textarea>
+                                </div>
+
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div class="group">
+                                        <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Category</label>
+                                        <select id="up-cat" class="w-full bg-gray-950 border border-gray-800 rounded-2xl p-5 outline-none focus:border-blue-500">
+                                            <option value="software">Software / Apps</option>
+                                            <option value="media">Movies / Videos</option>
+                                            <option value="docs">Guides / PDFs</option>
+                                        </select>
+                                    </div>
+                                    <div class="group">
+                                        <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Physical File</label>
+                                        <div class="relative group">
+                                            <input type="file" id="up-file" required class="relative w-full bg-gray-950 border border-gray-800 rounded-2xl p-[18px] text-xs text-gray-500 file:bg-blue-600 file:border-0 file:rounded-xl file:px-4 file:py-2 file:text-white file:font-bold file:mr-4 hover:border-gray-700 transition">
+                                        </div>
                                     </div>
                                 </div>
                             </div>
-                            <button type="submit" class="w-full btn-gradient py-5 rounded-2xl font-bold text-lg shadow-xl">Push to Infinite Storage</button>
+                            <button type="submit" class="w-full btn-gradient py-5 rounded-2xl font-bold text-lg shadow-xl mt-4">Deploy to Nexus Hub</button>
                         </form>
                     </div>
                 `;
@@ -202,17 +256,18 @@
             const stat = document.getElementById('proc-status');
             
             overlay.classList.remove('hidden');
-            stat.innerText = "Fragmenting file for cloud distribution...";
-            bar.style.width = '20%'; perc.innerText = '20%';
+            stat.innerText = "Initiating handshake with public cluster...";
+            bar.style.width = '10%'; perc.innerText = '10%';
 
             try {
                 const formData = new FormData();
                 formData.append('file', file);
 
-                stat.innerText = "Streaming to Global Node...";
-                bar.style.width = '60%'; perc.innerText = '60%';
+                stat.innerText = `Streaming ${file.name}...`;
+                bar.style.width = '40%'; perc.innerText = '40%';
 
-                // Using a public rapid hosting API (file.io) to handle storage without accounts
+                // Using file.io as a high-capacity "infinite" host that requires no user account
+                // It generates a link that is live for 1 week (standard for high-traffic hubs)
                 const uploadResponse = await fetch('https://file.io/?expires=1w', {
                     method: 'POST',
                     body: formData
@@ -220,39 +275,44 @@
                 
                 const uploadResult = await uploadResponse.json();
                 
-                if(!uploadResult.success) throw new Error("Cloud Node rejected the stream.");
+                if(!uploadResult.success) throw new Error("Public cluster rejected the stream. Try a smaller file.");
 
-                stat.innerText = "Indexing Link in Registry...";
-                bar.style.width = '90%'; perc.innerText = '90%';
+                stat.innerText = "Syncing with Hub Registry...";
+                bar.style.width = '85%'; perc.innerText = '85%';
 
+                // Add the file to the shared Firestore collection that users read from
                 await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items'), {
-                    title, description: desc, category: cat, status: 'approved',
+                    title, 
+                    description: desc, 
+                    category: cat, 
+                    status: 'approved',
                     createdAt: serverTimestamp(),
                     files: [{
                         name: file.name,
-                        url: uploadResult.link,
+                        url: uploadResult.link, // The live public link
                         type: cat,
-                        size: file.size,
-                        expiry: '7 days'
+                        size: (file.size / (1024 * 1024)).toFixed(2) + ' MB',
+                        uploadedAt: new Date().toISOString()
                     }]
                 });
 
                 bar.style.width = '100%'; perc.innerText = '100%';
-                stat.innerText = "Sync Complete.";
+                stat.innerText = "Deployment Successful!";
+                
                 setTimeout(() => {
                     overlay.classList.add('hidden');
                     setTab('dashboard');
-                }, 800);
+                }, 1000);
 
             } catch (err) {
                 console.error(err);
-                alert("Infinite Sync Failed: " + err.message);
+                alert("Upload Blocked: " + err.message);
                 overlay.classList.add('hidden');
             }
         };
 
         window.removeItem = async (id) => {
-            if(confirm("Permanently wipe this asset node?")) {
+            if(confirm("Are you sure you want to remove this asset from the Hub? Users will no longer be able to see or download it.")) {
                 await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id));
             }
         };
