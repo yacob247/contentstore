@@ -32,7 +32,10 @@
         };
 
         // Standardized safety filter
-        const INAPPROPRIATE_WORDS = ['porn', 'nude', 'nsfw', 'escort', 'camgirl', 'onlyfans', 'gambling', 'casino', 'betting', 'xxx'];
+        const INAPPROPRIATE_WORDS = [
+            'porn', 'nude', 'nsfw', 'escort', 'camgirl', 'onlyfans', 'gambling', 'casino', 'betting', 'xxx',
+            'sex', 'fuck', 'shit', 'bitch', 'ass', 'asshole', 'dick', 'cock', 'pussy', 'slut', 'whore', 'bastard', 'crap', 'cunt'
+        ];
         function containsBadWords(text) {
             if (!text) return false;
             const lowerText = text.toLowerCase();
