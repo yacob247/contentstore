@@ -32,7 +32,7 @@
                     <button onclick="navigate('home')" class="nav-btn bg-gray-700 text-white hover:text-white px-3 py-2 rounded-md text-sm font-medium transition-colors" data-view="home"><i class="fa-solid fa-house mr-1 hidden sm:inline"></i> Mainstreams</button>
                     <!-- Private Workspace Tab -->
                     <button id="nav-workspace" onclick="navigate('my_folders')" class="hidden nav-btn text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium transition-colors" data-view="my_folders"><i class="fa-solid fa-folder-open mr-1 hidden sm:inline"></i> Workspace</button>
-                    <button onclick="state.draftFolderId = null; navigate('submit')" class="nav-btn text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium transition-colors" data-view="submit"><i class="fa-solid fa-cloud-arrow-up mr-1 hidden sm:inline"></i> Upload</button>
+                    <button onclick="navigate('submit')" class="nav-btn text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium transition-colors" data-view="submit"><i class="fa-solid fa-cloud-arrow-up mr-1 hidden sm:inline"></i> Upload</button>
                     <div id="auth-nav-section" class="border-l border-gray-700 pl-2 sm:pl-4 flex items-center gap-3 ml-2">
                         <!-- Rendered dynamically -->
                     </div>
@@ -125,7 +125,7 @@
     <div id="upload-overlay" class="fixed inset-0 bg-gray-900/90 flex flex-col items-center justify-center z-[60] hidden backdrop-blur-sm transition-opacity duration-300">
         <div class="bg-gray-800 p-8 rounded-2xl shadow-2xl border border-gray-700 w-full max-w-md text-center">
             <i class="fa-solid fa-shield-check text-5xl text-green-500 mb-4 animate-bounce"></i>
-            <h3 class="text-2xl font-bold text-white mb-2">Securely Uploading...</h3>
+            <h3 class="text-2xl font-bold text-white mb-2">Securely Transmitting...</h3>
             <p id="upload-status-text" class="text-gray-400 mb-6">Processing your submission with SSL encryption</p>
             <div class="w-full bg-gray-700 rounded-full h-4 mb-2 overflow-hidden border border-gray-600">
                 <div id="upload-progress-bar" class="bg-blue-500 h-4 rounded-full transition-all duration-300" style="width: 0%"></div>
