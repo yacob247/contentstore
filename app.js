@@ -600,4 +600,58 @@
             }
         };
 
+// --- FOLDER ORGANIZATION LOGIC ---
+state.currentFolder = 'root';
+
+window.setFolder = (folderName) => {
+    state.currentFolder = folderName;
+    render();
+};
+
+window.showMoveModal = (itemId) => {
+    // Only allow verified users to move items
+    if (!state.user || state.user.isAnonymous) {
+        showToast("You must be logged in to reorganize files.", "error");
+        return;
+    }
+
+    // Find existing folders to populate a dropdown
+    const existingFolders = [...new Set(state.items.map(i => i.folder || 'root'))];
+    
+    openModal(`
+        <div class="bg-gray-900 rounded-2xl w-full max-w-sm border border-gray-700 shadow-2xl relative p-8 fade-in">
+            <button onclick="closeModal()" class="absolute top-4 right-4 text-gray-400 hover:text-white"><i class="fa-solid fa-times"></i></button>
+            <h2 class="text-xl font-bold text-white mb-4"><i class="fa-solid fa-folder-tree text-blue-500 mr-2"></i> Move to Folder</h2>
+            
+            <label class="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Select Existing Folder</label>
+            <select id="select-folder" class="w-full bg-gray-800 border border-gray-600 rounded-lg p-3 text-white mb-4">
+                ${existingFolders.map(f => `<option value="${f}">${f === 'root' ? 'Main Directory (Root)' : f}</option>`).join('')}
+            </select>
+
+            <div class="flex items-center my-4 text-gray-600"><div class="flex-grow border-t border-gray-700"></div><span class="px-3 text-xs font-medium uppercase tracking-wider">Or Create New</span><div class="flex-grow border-t border-gray-700"></div></div>
+
+            <label class="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">New Folder Name</label>
+            <input type="text" id="new-folder-name" class="w-full bg-gray-800 border border-gray-600 rounded-lg p-3 text-white mb-6" placeholder="e.g. Study Resources">
+
+            <button onclick="executeMove('${itemId}')" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl transition shadow-lg">Move Item</button>
+        </div>
+    `);
+};
+
+window.executeMove = async (itemId) => {
+    import { doc, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+    
+    const selectValue = document.getElementById('select-folder').value;
+    const newValue = document.getElementById('new-folder-name').value.trim();
+    const finalFolder = newValue !== '' ? newValue : selectValue;
+
+    try {
+        const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', itemId);
+        await updateDoc(itemRef, { folder: finalFolder });
+        showToast(`Successfully moved to ${finalFolder}`);
+        closeModal();
+    } catch (error) {
+        showToast("Error moving file.", "error");
+    }
+};
         window.addEventListener('DOMContentLoaded', init);
