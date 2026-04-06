@@ -42,7 +42,7 @@
                 app = initializeApp(firebaseConfig);
                 auth = getAuth(app);
                 db = getFirestore(app);
-                appId = typeof __app_id !== 'undefined' ? __app_id : 'infinite-Content-v1';
+                appId = typeof __app_id !== 'undefined' ? __app_id : 'infinite-nexus-v1';
 
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     await signInWithCustomToken(auth, __initial_auth_token);
@@ -62,7 +62,7 @@
 
         function setupDataListener() {
             if (!state.user) return;
-            const itemsRef = collection(db, 'artifacts', appId, 'public', 'data', 'content_Store_items');
+            const itemsRef = collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items');
             
             onSnapshot(itemsRef, (snapshot) => {
                 state.items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(i => i.status === 'approved');
@@ -586,7 +586,7 @@
 
                 statText.innerText = `Verifying & Syncing...`;
                 const finalStatus = isAutoApprove ? 'approved' : 'pending';
-                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'content_Store_items'), {
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items'), {
                     category: cat, title, description: desc, imageUrl: img, submitterEmail: state.user.email, files: finalFiles, status: finalStatus, createdAt: serverTimestamp()
                 });
                 
