@@ -3,189 +3,151 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Nexus Hub | Infinite Storage Admin</title>
+    <title>Nexus Hub | Pro Admin</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap');
-        
-        body { font-family: 'Inter', sans-serif; background-color: #030712; color: #f3f4f6; }
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: #111827; }
-        ::-webkit-scrollbar-thumb { background: #374151; border-radius: 10px; }
-        
-        .glass-card { background: rgba(17, 24, 39, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(75, 85, 99, 0.3); }
-        .btn-gradient { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); transition: all 0.3s ease; }
-        .btn-gradient:hover { transform: translateY(-2px); box-shadow: 0 10px 15px -3px rgba(37, 99, 235, 0.4); }
-        
-        .progress-shimmer {
-            background: linear-gradient(90deg, #3b82f6 0%, #60a5fa 50%, #3b82f6 100%);
-            background-size: 200% 100%;
-            animation: shimmer 1.5s infinite linear;
-        }
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;700;800&display=swap');
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #020617; color: #f8fafc; }
+        .glass { background: rgba(15, 23, 42, 0.8); backdrop-filter: blur(16px); border: 1px solid rgba(51, 65, 85, 0.5); }
+        .btn-primary { background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 10px 20px -5px rgba(59, 130, 246, 0.5); }
+        .shimmer { background: linear-gradient(90deg, #3b82f6 0%, #93c5fd 50%, #3b82f6 100%); background-size: 200% 100%; animation: shimmer 2s infinite linear; }
         @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
-        
-        .fade-in { animation: fadeIn 0.4s ease-out; }
+        .fade-in { animation: fadeIn 0.4s ease-out forwards; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-
-        .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-        .status-online { background: #10b981; box-shadow: 0 0 8px #10b981; }
     </style>
 </head>
-<body class="min-h-screen">
+<body class="min-h-screen selection:bg-blue-500/30">
 
-    <!-- Access Lock -->
-    <div id="auth-overlay" class="fixed inset-0 z-[100] bg-gray-950 flex items-center justify-center p-6">
-        <div class="w-full max-w-md glass-card p-10 rounded-[2.5rem] text-center shadow-2xl">
-            <div class="w-20 h-20 bg-blue-600/10 rounded-full flex items-center justify-center mx-auto mb-6 border border-blue-500/20">
-                <i class="fa-solid fa-vault text-4xl text-blue-500"></i>
+    <div id="login-screen" class="fixed inset-0 z-[100] bg-[#020617] flex items-center justify-center p-6">
+        <div class="w-full max-w-md glass p-10 rounded-[2.5rem] text-center shadow-2xl relative overflow-hidden">
+            <div class="absolute top-0 left-0 w-full h-1 bg-blue-600"></div>
+            <div class="w-20 h-20 bg-blue-600/10 rounded-2xl flex items-center justify-center mx-auto mb-8 border border-blue-500/20">
+                <i class="fa-solid fa-shield-halved text-4xl text-blue-500"></i>
             </div>
-            <h1 class="text-3xl font-extrabold mb-2 tracking-tight">Nexus Admin</h1>
-            <p class="text-gray-500 text-sm mb-8">Infinite Storage Cluster Access</p>
-            <form onsubmit="unlockAdmin(event)" class="space-y-4">
-                <input type="password" id="admin-key" required class="w-full bg-gray-950 border border-gray-800 rounded-2xl px-5 py-4 text-center text-2xl tracking-[0.4em] focus:border-blue-500 outline-none transition" placeholder="••••">
-                <button type="submit" class="w-full btn-gradient py-4 rounded-2xl font-bold text-lg">Initialize Session</button>
+            <h1 class="text-3xl font-extrabold mb-2 tracking-tight">Nexus Terminal</h1>
+            <p class="text-slate-500 text-sm mb-10 tracking-wide">Enter Administrative Credentials</p>
+            <form onsubmit="handleAuth(event)" class="space-y-4">
+                <input type="password" id="pass-key" required class="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-center text-2xl tracking-[0.5em] focus:border-blue-500 outline-none transition-all placeholder:tracking-normal" placeholder="••••">
+                <button type="submit" class="w-full btn-primary py-4 rounded-2xl font-bold text-lg shadow-lg">Access Cluster</button>
             </form>
         </div>
     </div>
 
-    <!-- Main Workspace -->
-    <div id="workspace" class="hidden flex-col min-h-screen">
-        <header class="sticky top-0 z-50 glass-card border-x-0 border-t-0 border-b">
+    <div id="app" class="hidden flex-col min-h-screen">
+        <nav class="sticky top-0 z-50 glass border-x-0 border-t-0 border-b border-slate-800/50">
             <div class="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
-                <div class="flex items-center gap-3">
-                    <div class="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-900/40">
-                        <i class="fa-solid fa-infinity text-white text-xl"></i>
+                <div class="flex items-center gap-4">
+                    <div class="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/20">
+                        <i class="fa-solid fa-bolt-lightning text-white text-xl"></i>
                     </div>
                     <div class="flex flex-col">
-                        <span class="font-extrabold text-xl tracking-tighter leading-none">INFINITE<span class="text-blue-500">HUB</span></span>
-                        <span class="text-[9px] uppercase tracking-[0.2em] text-gray-500 font-bold">Admin Console</span>
+                        <span class="font-extrabold text-xl tracking-tighter leading-none">NEXUS<span class="text-blue-500">PRO</span></span>
+                        <span class="text-[9px] uppercase tracking-[0.2em] text-blue-500/70 font-black mt-1">Infinite Cloud Admin</span>
                     </div>
                 </div>
-                <nav class="flex items-center gap-8">
-                    <button onclick="setTab('dashboard')" class="text-sm font-semibold hover:text-blue-400 transition" id="tab-dash">Dashboard</button>
-                    <button onclick="setTab('upload')" class="bg-blue-600 hover:bg-blue-700 px-6 py-2.5 rounded-xl text-sm font-bold transition shadow-lg">New Deployment</button>
-                    <button onclick="location.reload()" class="text-gray-500 hover:text-red-400 transition"><i class="fa-solid fa-power-off text-lg"></i></button>
-                </nav>
+                <div class="flex items-center gap-6">
+                    <button onclick="switchView('items')" class="text-sm font-bold text-slate-400 hover:text-white transition" id="nav-items">Assets</button>
+                    <button onclick="switchView('new')" class="bg-blue-600 hover:bg-blue-500 px-6 py-2.5 rounded-xl text-sm font-bold transition shadow-lg" id="nav-new">New Deployment</button>
+                    <div class="h-6 w-[1px] bg-slate-800"></div>
+                    <button onclick="location.reload()" class="text-slate-500 hover:text-red-500 transition"><i class="fa-solid fa-power-off text-lg"></i></button>
+                </div>
             </div>
-        </header>
+        </nav>
 
-        <main id="main-content" class="max-w-6xl mx-auto p-8 w-full"></main>
+        <main id="view-port" class="max-w-6xl mx-auto p-8 w-full flex-grow"></main>
     </div>
 
-    <!-- Smart Upload Processing Overlay -->
-    <div id="processing-overlay" class="fixed inset-0 z-[110] bg-gray-950/95 backdrop-blur-xl flex items-center justify-center hidden p-6">
-        <div class="w-full max-w-lg glass-card p-12 rounded-[3rem] text-center border-blue-500/20">
-            <div class="mb-8">
+    <div id="upload-modal" class="fixed inset-0 z-[110] bg-slate-950/95 backdrop-blur-xl flex items-center justify-center hidden p-6">
+        <div class="w-full max-w-lg glass p-12 rounded-[3rem] text-center border-blue-500/20 shadow-3xl">
+            <div id="status-icon" class="mb-8">
                 <div class="w-24 h-24 bg-blue-500/10 rounded-full flex items-center justify-center mx-auto mb-4 border border-blue-500/20">
-                    <i id="proc-icon" class="fa-solid fa-microchip text-5xl text-blue-500 animate-pulse"></i>
+                    <i class="fa-solid fa-satellite-dish text-5xl text-blue-500 animate-pulse"></i>
                 </div>
-                <h2 id="proc-title" class="text-2xl font-bold mb-2">Infinite Stream Sync</h2>
-                <p id="proc-status" class="text-gray-400 text-sm font-mono">Compressing and Routing Bytes...</p>
+            </div>
+            <h2 id="modal-title" class="text-2xl font-bold mb-2">Cloud Transmission</h2>
+            <p id="modal-status" class="text-slate-400 text-sm font-mono mb-10">Optimizing file for infinite hosting...</p>
+
+            <div id="progress-container">
+                <div class="relative h-3 bg-slate-900 rounded-full overflow-hidden border border-slate-800 mb-4">
+                    <div id="modal-bar" class="absolute top-0 left-0 h-full shimmer w-0 transition-all duration-500"></div>
+                </div>
+                <div class="flex justify-between text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">
+                    <span id="modal-bytes">Initializing</span>
+                    <span id="modal-perc">0%</span>
+                </div>
             </div>
 
-            <div class="relative h-4 bg-gray-900 rounded-full overflow-hidden border border-gray-800 mb-4">
-                <div id="proc-bar" class="absolute top-0 left-0 h-full progress-shimmer w-0 transition-all duration-300"></div>
-            </div>
-            <div id="proc-meta" class="flex justify-between text-[10px] font-bold text-gray-500 uppercase tracking-widest">
-                <span>Optimizing Data</span>
-                <span id="proc-perc">0%</span>
+            <div id="manual-fix" class="hidden mt-8 p-6 bg-red-500/5 border border-red-500/20 rounded-2xl text-left">
+                <h4 class="text-red-500 text-xs font-bold mb-2 uppercase tracking-widest">Automatic Sync Blocked</h4>
+                <p class="text-slate-400 text-[11px] mb-4">Your browser or network blocked the auto-upload. Don't worry, you can still finish the post:</p>
+                <input type="text" id="manual-url" class="w-full bg-black border border-slate-800 rounded-xl p-3 text-xs text-blue-400 outline-none focus:border-blue-500 mb-3" placeholder="Paste link (Google Drive, Mega, etc)">
+                <button onclick="finishWithManualLink()" class="w-full bg-slate-800 hover:bg-slate-700 py-3 rounded-xl text-xs font-bold transition">Save with Manual Link</button>
             </div>
 
-            <button onclick="abortOperation()" class="mt-10 text-gray-500 hover:text-white text-xs font-bold uppercase tracking-widest transition">Cancel Link</button>
+            <button onclick="location.reload()" class="mt-10 text-slate-500 hover:text-white text-[10px] font-black uppercase tracking-[0.3em] transition">Terminate Operation</button>
         </div>
     </div>
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, query, orderBy, deleteDoc, doc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, deleteDoc, doc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        let db, auth, currentTab = 'dashboard';
+        let db, auth, currentView = 'items', pendingData = null;
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'infinite-nexus-v1';
-// For Firebase JS SDK v7.20.0 and later, measurementId is optional
-const firebaseConfig = {
-  apiKey: "AIzaSyB-3kAk-lMT3jTny2YIs2R1_0mG-tJlmJI",
-  authDomain: "puzzlesapp.firebaseapp.com",
-  databaseURL: "https://puzzlesapp-default-rtdb.firebaseio.com",
-  projectId: "puzzlesapp",
-  storageBucket: "puzzlesapp.firebasestorage.app",
-  messagingSenderId: "303461259730",
-  appId: "1:303461259730:web:a1790a976b6d58d71dd00b",
-  measurementId: "G-8YEJEBX0NE"
-};
-        window.unlockAdmin = (e) => {
+        const config = JSON.parse(__firebase_config);
+
+        window.handleAuth = (e) => {
             e.preventDefault();
-            // Simple logic for age-appropriate admin access
-            if (document.getElementById('admin-key').value === 'password123') {
-                document.getElementById('auth-overlay').classList.add('hidden');
-                document.getElementById('workspace').classList.remove('hidden');
-                document.getElementById('workspace').classList.add('flex');
-                init();
-            } else { 
-                alert("Key Denied. Please enter the correct administration password."); 
-            }
+            if (document.getElementById('pass-key').value === 'password123') {
+                document.getElementById('login-screen').classList.add('hidden');
+                document.getElementById('app').classList.replace('hidden', 'flex');
+                startSession();
+            } else { alert("Access Denied"); }
         };
 
-        async function init() {
-            const app = initializeApp(firebaseConfig);
+        async function startSession() {
+            const app = initializeApp(config);
             auth = getAuth(app);
             db = getFirestore(app);
-
             await signInAnonymously(auth);
-            onAuthStateChanged(auth, u => {
-                if (u) {
-                    setTab('dashboard');
-                }
-            });
+            onAuthStateChanged(auth, u => { if(u) switchView('items'); });
         }
 
-        window.setTab = (tab) => {
-            currentTab = tab;
+        window.switchView = (v) => {
+            currentView = v;
             render();
         }
 
-        async function render() {
-            const container = document.getElementById('main-content');
-            if (currentTab === 'dashboard') {
-                container.innerHTML = `<div class="grid gap-6" id="items-grid"></div>`;
-                // Crucial: Use the same path as the user-facing app
-                const q = collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items');
-                
-                onSnapshot(q, snap => {
+        function render() {
+            const out = document.getElementById('view-port');
+            if (currentView === 'items') {
+                out.innerHTML = `<div class="grid gap-8" id="item-feed"></div>`;
+                onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items'), snap => {
                     const items = snap.docs.map(d => ({id: d.id, ...d.data()}));
-                    document.getElementById('items-grid').innerHTML = `
-                        <div class="flex justify-between items-end mb-8">
-                            <div>
-                                <h2 class="text-3xl font-extrabold">Active Nodes</h2>
-                                <p class="text-gray-500">Live storage data visible to users</p>
-                            </div>
-                            <div class="flex items-center gap-2 bg-gray-900 px-4 py-2 rounded-full border border-gray-800">
-                                <span class="status-dot status-online"></span>
-                                <span class="text-xs font-bold uppercase tracking-wider text-gray-400">Database Connected</span>
-                            </div>
+                    document.getElementById('item-feed').innerHTML = `
+                        <div class="flex justify-between items-end mb-4">
+                            <h2 class="text-3xl font-black tracking-tighter">Cluster Assets <span class="text-blue-600">.</span></h2>
+                            <p class="text-slate-500 text-sm font-bold uppercase tracking-widest">${items.length} Live Nodes</p>
                         </div>
                         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                            ${items.length === 0 ? `
-                                <div class="col-span-full py-20 text-center border-2 border-dashed border-gray-800 rounded-[2rem]">
-                                    <i class="fa-solid fa-inbox text-4xl text-gray-700 mb-4"></i>
-                                    <p class="text-gray-500 font-medium">No assets deployed yet. Start by creating a new deployment.</p>
-                                </div>
-                            ` : items.map(i => `
-                                <div class="glass-card p-6 rounded-3xl hover:border-blue-500/50 transition-all group fade-in relative overflow-hidden">
-                                    <div class="flex justify-between items-start mb-6">
-                                        <div class="w-12 h-12 bg-blue-600/10 rounded-2xl flex items-center justify-center text-blue-400 group-hover:scale-110 transition">
-                                            <i class="fa-solid ${i.category === 'software' ? 'fa-box-archive' : i.category === 'media' ? 'fa-clapperboard' : 'fa-file-lines'} text-xl"></i>
+                            ${items.map(i => `
+                                <div class="glass p-6 rounded-[2rem] hover:border-blue-500/50 transition-all group fade-in relative overflow-hidden">
+                                    <div class="flex justify-between items-start mb-8">
+                                        <div class="w-12 h-12 bg-blue-600/10 rounded-2xl flex items-center justify-center text-blue-500 group-hover:scale-110 transition duration-500">
+                                            <i class="fa-solid ${i.category === 'software' ? 'fa-box' : i.category === 'media' ? 'fa-play' : 'fa-file-lines'} text-xl"></i>
                                         </div>
-                                        <button onclick="removeItem('${i.id}')" class="w-8 h-8 rounded-full bg-red-500/10 text-red-500 flex items-center justify-center hover:bg-red-500 hover:text-white transition">
+                                        <button onclick="trash('${i.id}')" class="w-10 h-10 rounded-full bg-slate-900 text-slate-500 flex items-center justify-center hover:bg-red-500 hover:text-white transition-all">
                                             <i class="fa-solid fa-trash-can text-sm"></i>
                                         </button>
                                     </div>
-                                    <h3 class="font-bold text-xl mb-2 line-clamp-1">${i.title}</h3>
-                                    <p class="text-gray-500 text-sm mb-6 line-clamp-2 h-10">${i.description}</p>
-                                    <div class="flex items-center justify-between pt-4 border-t border-gray-800">
-                                        <span class="text-[10px] font-bold uppercase tracking-widest text-blue-500">${i.files?.length || 1} Asset Stream</span>
-                                        <span class="text-[10px] text-gray-600 font-mono">ID: ${i.id.substring(0,6)}</span>
+                                    <h3 class="font-extrabold text-xl mb-2 line-clamp-1">${i.title}</h3>
+                                    <p class="text-slate-500 text-sm mb-8 line-clamp-2 leading-relaxed">${i.description}</p>
+                                    <div class="flex items-center justify-between pt-5 border-t border-slate-800/50">
+                                        <span class="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500">Active Asset</span>
+                                        <span class="text-[10px] text-slate-600 font-mono">${new Date(i.createdAt?.seconds * 1000).toLocaleDateString()}</span>
                                     </div>
                                 </div>
                             `).join('')}
@@ -193,131 +155,121 @@ const firebaseConfig = {
                     `;
                 });
             } else {
-                container.innerHTML = `
-                    <div class="max-w-2xl mx-auto py-4 fade-in">
-                        <form onsubmit="handleInfiniteUpload(event)" class="glass-card p-10 rounded-[2.5rem] space-y-6 shadow-2xl border-blue-500/10">
-                            <div class="flex items-center gap-4 mb-2">
-                                <div class="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center">
-                                    <i class="fa-solid fa-cloud-arrow-up text-white text-xl"></i>
-                                </div>
-                                <div>
-                                    <h2 class="text-2xl font-bold">New Asset Stream</h2>
-                                    <p class="text-gray-500 text-xs">Files are hosted on the infinite public cluster</p>
-                                </div>
+                out.innerHTML = `
+                    <div class="max-w-xl mx-auto py-6 fade-in">
+                        <form onsubmit="deploy(event)" class="glass p-10 rounded-[3rem] space-y-6 shadow-2xl">
+                            <div class="flex items-center gap-4 mb-4">
+                                <div class="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center"><i class="fa-solid fa-cloud-arrow-up text-white text-xl"></i></div>
+                                <div><h2 class="text-2xl font-bold">New Deployment</h2><p class="text-slate-500 text-xs">Public file streaming enabled</p></div>
                             </div>
-                            
                             <div class="space-y-4">
-                                <div class="group">
-                                    <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Asset Name</label>
-                                    <input id="up-title" required class="w-full bg-gray-950 border border-gray-800 rounded-2xl p-5 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition" placeholder="e.g. Photoshop Portable 2024">
-                                </div>
-
-                                <div class="group">
-                                    <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Description</label>
-                                    <textarea id="up-desc" required class="w-full bg-gray-950 border border-gray-800 rounded-2xl p-5 h-32 focus:border-blue-500 outline-none transition" placeholder="Explain what this file is for..."></textarea>
-                                </div>
-
-                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div class="group">
-                                        <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Category</label>
-                                        <select id="up-cat" class="w-full bg-gray-950 border border-gray-800 rounded-2xl p-5 outline-none focus:border-blue-500">
-                                            <option value="software">Software / Apps</option>
-                                            <option value="media">Movies / Videos</option>
-                                            <option value="docs">Guides / PDFs</option>
-                                        </select>
-                                    </div>
-                                    <div class="group">
-                                        <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Physical File</label>
-                                        <div class="relative group">
-                                            <input type="file" id="up-file" required class="relative w-full bg-gray-950 border border-gray-800 rounded-2xl p-[18px] text-xs text-gray-500 file:bg-blue-600 file:border-0 file:rounded-xl file:px-4 file:py-2 file:text-white file:font-bold file:mr-4 hover:border-gray-700 transition">
-                                        </div>
+                                <input id="f-title" required class="w-full bg-slate-950 border border-slate-800 rounded-2xl p-5 focus:border-blue-500 outline-none transition" placeholder="Application Name">
+                                <textarea id="f-desc" required class="w-full bg-slate-950 border border-slate-800 rounded-2xl p-5 h-32 focus:border-blue-500 outline-none transition" placeholder="Detailed description for users..."></textarea>
+                                <div class="grid grid-cols-2 gap-4">
+                                    <select id="f-cat" class="bg-slate-950 border border-slate-800 rounded-2xl p-5 outline-none focus:border-blue-500">
+                                        <option value="software">Software</option>
+                                        <option value="media">Video/Media</option>
+                                        <option value="docs">Document</option>
+                                    </select>
+                                    <div class="relative group">
+                                        <input type="file" id="f-file" required class="w-full bg-slate-950 border border-slate-800 rounded-2xl p-[18px] text-[10px] text-slate-500 file:bg-blue-600 file:border-0 file:rounded-xl file:px-3 file:py-1.5 file:text-white file:font-black file:mr-4 file:uppercase cursor-pointer">
                                     </div>
                                 </div>
                             </div>
-                            <button type="submit" class="w-full btn-gradient py-5 rounded-2xl font-bold text-lg shadow-xl mt-4">Deploy to Nexus Hub</button>
+                            <button type="submit" class="w-full btn-primary py-5 rounded-2xl font-black text-lg shadow-xl uppercase tracking-widest mt-4">Start Deployment</button>
                         </form>
                     </div>
                 `;
             }
         }
 
-        window.handleInfiniteUpload = async (e) => {
+        window.deploy = async (e) => {
             e.preventDefault();
-            const file = document.getElementById('up-file').files[0];
-            const title = document.getElementById('up-title').value;
-            const desc = document.getElementById('up-desc').value;
-            const cat = document.getElementById('up-cat').value;
+            const file = document.getElementById('f-file').files[0];
+            const title = document.getElementById('f-title').value;
+            const desc = document.getElementById('f-desc').value;
+            const cat = document.getElementById('f-cat').value;
 
             if(!file) return;
 
-            const overlay = document.getElementById('processing-overlay');
-            const bar = document.getElementById('proc-bar');
-            const perc = document.getElementById('proc-perc');
-            const stat = document.getElementById('proc-status');
+            const modal = document.getElementById('upload-modal');
+            const bar = document.getElementById('modal-bar');
+            const perc = document.getElementById('modal-perc');
+            const stat = document.getElementById('modal-status');
+            const bytes = document.getElementById('modal-bytes');
             
-            overlay.classList.remove('hidden');
-            stat.innerText = "Initiating handshake with public cluster...";
+            modal.classList.remove('hidden');
+            stat.innerText = "Fragmenting data for stream...";
             bar.style.width = '10%'; perc.innerText = '10%';
+            bytes.innerText = (file.size / 1024).toFixed(0) + " KB Total";
+
+            // Save data for manual fallback
+            pendingData = { title, description: desc, category: cat, fileName: file.name };
 
             try {
+                // Engine: file.io (Standard public stream)
                 const formData = new FormData();
                 formData.append('file', file);
 
-                stat.innerText = `Streaming ${file.name}...`;
-                bar.style.width = '40%'; perc.innerText = '40%';
+                stat.innerText = "Streaming to Global Cluster...";
+                bar.style.width = '50%'; perc.innerText = '50%';
 
-                // Using file.io as a high-capacity "infinite" host that requires no user account
-                // It generates a link that is live for 1 week (standard for high-traffic hubs)
-                const uploadResponse = await fetch('https://file.io/?expires=1w', {
+                const res = await fetch('https://file.io/?expires=1w', {
                     method: 'POST',
                     body: formData
                 });
-                
-                const uploadResult = await uploadResponse.json();
-                
-                if(!uploadResult.success) throw new Error("Public cluster rejected the stream. Try a smaller file.");
 
-                stat.innerText = "Syncing with Hub Registry...";
-                bar.style.width = '85%'; perc.innerText = '85%';
-
-                // Add the file to the shared Firestore collection that users read from
-                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items'), {
-                    title, 
-                    description: desc, 
-                    category: cat, 
-                    status: 'approved',
-                    createdAt: serverTimestamp(),
-                    files: [{
-                        name: file.name,
-                        url: uploadResult.link, // The live public link
-                        type: cat,
-                        size: (file.size / (1024 * 1024)).toFixed(2) + ' MB',
-                        uploadedAt: new Date().toISOString()
-                    }]
-                });
-
-                bar.style.width = '100%'; perc.innerText = '100%';
-                stat.innerText = "Deployment Successful!";
+                if(!res.ok) throw new Error("CORS_BLOCK");
+                const result = await res.json();
                 
-                setTimeout(() => {
-                    overlay.classList.add('hidden');
-                    setTab('dashboard');
-                }, 1000);
+                if(!result.success) throw new Error("API_REJECT");
+
+                stat.innerText = "Syncing Node Registry...";
+                bar.style.width = '90%'; perc.innerText = '90%';
+
+                await saveToDatabase(result.link);
+                finishUpload();
 
             } catch (err) {
-                console.error(err);
-                alert("Upload Blocked: " + err.message);
-                overlay.classList.add('hidden');
+                console.error("Upload Sync Failed:", err);
+                stat.innerText = "Automatic Stream Blocked.";
+                document.getElementById('status-icon').innerHTML = '<i class="fa-solid fa-circle-exclamation text-5xl text-red-500"></i>';
+                document.getElementById('progress-container').classList.add('hidden');
+                document.getElementById('manual-fix').classList.remove('hidden');
             }
         };
 
-        window.removeItem = async (id) => {
-            if(confirm("Are you sure you want to remove this asset from the Hub? Users will no longer be able to see or download it.")) {
-                await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id));
-            }
-        };
+        async function saveToDatabase(url) {
+            await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items'), {
+                ...pendingData,
+                status: 'approved',
+                createdAt: serverTimestamp(),
+                files: [{ name: pendingData.fileName, url: url, type: pendingData.category }]
+            });
+        }
 
-        window.abortOperation = () => location.reload();
+        window.finishWithManualLink = async () => {
+            const url = document.getElementById('manual-url').value;
+            if(!url || !url.startsWith('http')) return alert("Please enter a valid URL (Google Drive, Mega, etc)");
+            
+            document.getElementById('manual-fix').innerHTML = '<p class="text-blue-500 animate-pulse font-bold">Saving Node...</p>';
+            await saveToDatabase(url);
+            finishUpload();
+        }
+
+        function finishUpload() {
+            document.getElementById('modal-bar').style.width = '100%';
+            document.getElementById('modal-perc').innerText = '100%';
+            document.getElementById('modal-status').innerText = "Deployment Live!";
+            setTimeout(() => {
+                document.getElementById('upload-modal').classList.add('hidden');
+                switchView('items');
+            }, 1000);
+        }
+
+        window.trash = async (id) => {
+            if(confirm("Destroy this asset node?")) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id));
+        };
     </script>
 </body>
 </html>
