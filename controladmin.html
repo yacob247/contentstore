@@ -237,15 +237,18 @@
                         </div>
                         <h3 class="text-2xl font-bold text-white">Edit Stream</h3>
                     </div>
-                    <div class="space-y-4">
+                    
+                    <div class="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
                         <div class="group">
                             <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Title</label>
                             <input type="text" id="edit-title" value="${item.title.replace(/"/g, '&quot;')}" class="w-full bg-gray-950 border border-gray-800 rounded-2xl p-4 text-white focus:border-blue-500 outline-none transition">
                         </div>
+                        
                         <div class="group">
                             <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Description</label>
-                            <textarea id="edit-desc" rows="4" class="w-full bg-gray-950 border border-gray-800 rounded-2xl p-4 text-white focus:border-blue-500 outline-none transition">${item.description}</textarea>
+                            <textarea id="edit-desc" rows="3" class="w-full bg-gray-950 border border-gray-800 rounded-2xl p-4 text-white focus:border-blue-500 outline-none transition">${item.description}</textarea>
                         </div>
+                        
                         <div class="group">
                             <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Category</label>
                             <select id="edit-cat" class="w-full bg-gray-950 border border-gray-800 rounded-2xl p-4 text-white focus:border-blue-500 outline-none transition">
@@ -260,10 +263,29 @@
                                 <option value="other" ${item.category==='other'?'selected':''}>Misc / Other</option>
                             </select>
                         </div>
-                        <div class="flex gap-3 pt-4">
-                            <button onclick="closeModal()" class="flex-1 bg-gray-900 hover:bg-gray-800 border border-gray-800 text-white font-bold py-4 rounded-2xl transition">Cancel</button>
-                            <button onclick="saveEdit('${id}')" class="flex-1 btn-gradient text-white font-bold py-4 rounded-2xl transition shadow-lg">Save Changes</button>
+
+                        <div class="group">
+                            <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Cover Image URL</label>
+                            <input type="url" id="edit-img" value="${(item.imageUrl || '').replace(/"/g, '&quot;')}" class="w-full bg-gray-950 border border-gray-800 rounded-2xl p-4 text-white focus:border-blue-500 outline-none transition" placeholder="https://...">
                         </div>
+                        
+                        <div class="group bg-gray-900/50 p-4 rounded-2xl border border-gray-800">
+                            <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-3 ml-1"><i class="fa-solid fa-link text-blue-500 mr-1"></i> Stream / File URLs</label>
+                            <div class="space-y-3">
+                                ${(item.files || []).map((f, idx) => `
+                                    <div class="relative">
+                                        <span class="absolute left-3 top-3 text-[10px] font-bold text-gray-600 uppercase">File ${idx + 1}</span>
+                                        <input type="text" id="edit-file-url-${idx}" value="${(f.url || '').replace(/"/g, '&quot;')}" class="w-full bg-gray-950 border border-gray-800 rounded-xl px-3 pt-7 pb-2 text-sm text-gray-300 focus:border-blue-500 outline-none transition" placeholder="Stream URL">
+                                    </div>
+                                `).join('')}
+                                ${(!item.files || item.files.length === 0) ? `<p class="text-xs text-gray-600 italic">No stream links attached to this node.</p>` : ''}
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="flex gap-3 pt-6 mt-2 border-t border-gray-800">
+                        <button onclick="closeModal()" class="flex-1 bg-gray-900 hover:bg-gray-800 border border-gray-800 text-white font-bold py-4 rounded-2xl transition">Cancel</button>
+                        <button onclick="saveEdit('${id}')" class="flex-1 btn-gradient text-white font-bold py-4 rounded-2xl transition shadow-lg">Save Changes</button>
                     </div>
                 </div>
             `);
@@ -273,11 +295,25 @@
             const title = document.getElementById('edit-title').value;
             const description = document.getElementById('edit-desc').value;
             const category = document.getElementById('edit-cat').value;
+            const imageUrl = document.getElementById('edit-img').value;
+            
+            // Map over original items array to update URLs
+            const item = adminItems.find(i => i.id === id);
+            let updatedFiles = item.files ? [...item.files] : [];
+            updatedFiles.forEach((f, idx) => {
+                const urlInput = document.getElementById(`edit-file-url-${idx}`);
+                if (urlInput) {
+                    f.url = urlInput.value.trim();
+                }
+            });
+
             try {
-                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id), { title, description, category });
-                showToast("Stream updated successfully.");
+                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id), { 
+                    title, description, category, imageUrl, files: updatedFiles 
+                });
+                showToast("Stream metadata and links updated.");
                 closeModal();
-            } catch (e) { showToast("Failed to update.", "error"); }
+            } catch (e) { showToast("Failed to update data.", "error"); }
         };
 
         // --- Render Functions ---
@@ -313,7 +349,7 @@
                     </td>
                     <td class="p-5">${statusBadge}</td>
                     <td class="p-5 flex justify-end gap-2">
-                        <button onclick="editItem('${i.id}')" class="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-400 flex items-center justify-center hover:bg-blue-600 hover:text-white transition" title="Edit Metadata"><i class="fa-solid fa-pen text-xs"></i></button>
+                        <button onclick="editItem('${i.id}')" class="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-400 flex items-center justify-center hover:bg-blue-600 hover:text-white transition" title="Edit Metadata & URLs"><i class="fa-solid fa-pen text-xs"></i></button>
                         ${!isApproved ? `<button onclick="updateStatus('${i.id}', 'approved')" class="w-8 h-8 rounded-lg bg-green-500/10 text-green-500 flex items-center justify-center hover:bg-green-600 hover:text-white transition" title="Approve"><i class="fa-solid fa-check text-xs"></i></button>` : ''}
                         ${i.status !== 'rejected' ? `<button onclick="updateStatus('${i.id}', 'rejected')" class="w-8 h-8 rounded-lg bg-orange-500/10 text-orange-400 flex items-center justify-center hover:bg-orange-600 hover:text-white transition" title="Reject"><i class="fa-solid fa-xmark text-xs"></i></button>` : ''}
                         <button onclick="removeItem('${i.id}')" class="w-8 h-8 rounded-lg bg-red-500/10 text-red-500 flex items-center justify-center hover:bg-red-600 hover:text-white transition" title="Delete Permenantly"><i class="fa-solid fa-trash text-xs"></i></button>
@@ -385,6 +421,11 @@
                             <div class="group">
                                 <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Description</label>
                                 <textarea id="up-desc" required class="w-full bg-gray-950 border border-gray-800 rounded-2xl p-5 h-32 text-white focus:border-blue-500 outline-none transition" placeholder="Explain what this file is for..."></textarea>
+                            </div>
+                            
+                            <div class="group">
+                                <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Cover Image URL (Optional)</label>
+                                <input type="url" id="up-img" class="w-full bg-gray-950 border border-gray-800 rounded-2xl p-5 text-white focus:border-blue-500 outline-none transition" placeholder="Paste an image URL for the cover art...">
                             </div>
 
                             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -487,6 +528,7 @@
             const title = document.getElementById('up-title').value;
             const desc = document.getElementById('up-desc').value;
             const cat = document.getElementById('up-cat').value;
+            const img = document.getElementById('up-img').value;
 
             if(!file) return;
 
@@ -514,6 +556,7 @@
                     title, 
                     description: desc, 
                     category: cat, 
+                    imageUrl: img,
                     status: 'approved', // Auto-approved since it's an admin upload
                     submitterEmail: 'Admin',
                     createdAt: serverTimestamp(),
