@@ -116,7 +116,7 @@
         window.removeItem = async (id) => {
             if(confirm("Permanently purge this asset from the Hub? It will be deleted for everyone.")) {
                 try {
-                    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id));
+                    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_Store_items', id));
                     showToast("Asset purged successfully.");
                 } catch(e) { showToast("Failed to delete.", "error"); }
             }
