@@ -70,15 +70,17 @@
     <div id="modal-container" onclick="if(event.target === this) closeModal()" class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 hidden opacity-0 transition-opacity duration-300 backdrop-blur-sm p-4"></div>
     <div id="toast-container" class="fixed bottom-4 right-4 z-50 flex flex-col gap-2"></div>
     
-    <div id="upload-overlay" class="fixed inset-0 bg-gray-900/90 flex flex-col items-center justify-center z-[60] hidden backdrop-blur-sm transition-opacity duration-300">
+    <!-- Robust Upload Progress Overlay -->
+    <div id="upload-overlay" class="fixed inset-0 bg-gray-900/95 flex flex-col items-center justify-center z-[60] hidden backdrop-blur-sm transition-opacity duration-300">
         <div class="bg-gray-800 p-8 rounded-2xl shadow-2xl border border-gray-700 w-full max-w-md text-center">
             <i class="fa-solid fa-cloud-arrow-up text-5xl text-blue-500 mb-4 animate-bounce"></i>
             <h3 class="text-2xl font-bold text-white mb-2">Uploading Files...</h3>
-            <p id="upload-status-text" class="text-gray-400 mb-6">Processing your submission</p>
+            <p id="upload-status-text" class="text-gray-400 mb-6 font-mono text-sm truncate px-4">Initializing...</p>
             <div class="w-full bg-gray-700 rounded-full h-4 mb-2 overflow-hidden border border-gray-600">
                 <div id="upload-progress-bar" class="bg-blue-500 h-4 rounded-full transition-all duration-300" style="width: 0%"></div>
             </div>
-            <p id="upload-percentage" class="text-sm font-bold text-blue-400">0%</p>
+            <p id="upload-percentage" class="text-sm font-bold text-blue-400 font-mono tracking-wide">0% (Connecting...)</p>
+            <button id="cancel-upload-btn" onclick="cancelCurrentUpload()" class="mt-6 text-red-400 hover:text-red-500 text-sm font-bold underline hidden">Force Cancel</button>
         </div>
     </div>
 
@@ -93,15 +95,14 @@
         const ADMIN_USERNAME = 'admin';
         const ADMIN_PASSWORD = 'password123';
 
-        const ALLOWED_EXTENSIONS = ".pdf,.epub,.txt,.html,.docx,.csv,.json,.xlsx,.pptx,.mp4,.mov,.avi,.mkv,.mp3,.wav,.jpg,.png,.gif,.zip,.rar,.gz,.sqlite,.sql,.dbf,.iso";
-
         const state = {
             currentView: 'admin',
             currentCategory: 'all',
             items: [],
             user: null,
             isLoading: true,
-            draftFiles: []
+            draftFiles: [],
+            activeUploadTask: null // Track active task for cancelling
         };
 
         const CATEGORIES = {
@@ -116,6 +117,22 @@
         };
 
         let app, auth, db, storage, appId;
+
+        // --- Core Helpers ---
+        const formatBytes = (bytes) => {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        };
+
+        window.cancelCurrentUpload = () => {
+            if (state.activeUploadTask) {
+                state.activeUploadTask.cancel();
+                showToast("Upload forcefully cancelled.", "error");
+            }
+        };
 
         // 1. Admin Login
         window.handleAdminLogin = async (e) => {
@@ -158,7 +175,6 @@
                 storage = getStorage(app);
                 appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
-                // Authenticate behind the scenes to allow Firestore/Storage usage
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     await signInWithCustomToken(auth, __initial_auth_token);
                 } else {
@@ -170,8 +186,8 @@
                     if (user) setupDataListener();
                 });
             } catch (error) {
-                console.error("Firebase Initialization Error:", error);
-                showToast("Failed to connect to backend services.", "error");
+                console.warn("Firebase Auth Error:", error);
+                showToast("Auth Warning: Connect your own Firebase project to upload files.", "error");
             }
         }
 
@@ -188,7 +204,7 @@
             });
         }
 
-        // --- Core Utilities ---
+        // --- View & Navigation Logic ---
         window.navigate = (view) => {
             state.currentView = view;
             if(view === 'submit') state.draftFiles = [];
@@ -210,14 +226,14 @@
             const container = document.getElementById('toast-container');
             const toast = document.createElement('div');
             const color = type === 'success' ? 'bg-green-600' : 'bg-red-600';
-            toast.className = `${color} text-white px-4 py-3 rounded shadow-lg flex items-center gap-3 transform transition-all duration-300 translate-y-10 opacity-0`;
-            toast.innerHTML = `<span>${message}</span>`;
+            toast.className = `${color} text-white px-4 py-3 rounded shadow-lg flex items-center gap-3 transform transition-all duration-300 translate-y-10 opacity-0 max-w-sm break-words`;
+            toast.innerHTML = `<span class="text-sm font-medium leading-tight">${message}</span>`;
             container.appendChild(toast);
             setTimeout(() => toast.classList.remove('translate-y-10', 'opacity-0'), 10);
             setTimeout(() => {
                 toast.classList.add('translate-y-10', 'opacity-0');
                 setTimeout(() => toast.remove(), 300);
-            }, 3000);
+            }, 5000);
         };
 
         window.openModal = (htmlContent) => {
@@ -233,7 +249,6 @@
             setTimeout(() => { modal.classList.add('hidden'); modal.innerHTML = ''; }, 300);
         };
 
-        // --- Render Functions ---
         function render() {
             if (state.isLoading) return;
             const contentDiv = document.getElementById('app-content');
@@ -244,7 +259,6 @@
 
         // Admin Dashboard
         function getAdminHTML() {
-            const pending = state.items.filter(i => i.status === 'pending');
             const renderRow = (item) => {
                 const catInfo = CATEGORIES[item.category] || CATEGORIES['other'];
                 return `
@@ -279,7 +293,7 @@
                                         <th class="p-3">Title</th>
                                         <th class="p-3">Submitter</th>
                                         <th class="p-3">Status</th>
-                                        <th class="p-3">Actions (Edit/Approve/Delete)</th>
+                                        <th class="p-3">Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -293,7 +307,6 @@
         }
 
         window.updateDocStatus = async (id, status) => {
-            if (!state.user) return;
             try {
                 await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id), { status });
                 showToast(`Marked as ${status}.`);
@@ -301,8 +314,7 @@
         };
 
         window.deleteDocItem = async (id) => {
-            if (!state.user) return;
-            if(confirm("Permanently delete this item and its records?")) {
+            if(confirm("Permanently delete this item?")) {
                 await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id));
                 showToast("Item deleted.");
             }
@@ -315,14 +327,14 @@
                 <div class="bg-gray-800 p-6 rounded-xl w-full max-w-lg border border-gray-700 shadow-2xl">
                     <h3 class="text-xl font-bold text-white mb-4">Edit Entry</h3>
                     <div class="space-y-4">
-                        <input type="text" id="edit-title" value="${item.title.replace(/"/g, '&quot;')}" class="w-full bg-gray-900 border border-gray-600 rounded p-2 text-white" placeholder="Title">
+                        <input type="text" id="edit-title" value="${item.title.replace(/"/g, '&quot;')}" class="w-full bg-gray-900 border border-gray-600 rounded p-2 text-white">
                         <textarea id="edit-desc" rows="4" class="w-full bg-gray-900 border border-gray-600 rounded p-2 text-white">${item.description}</textarea>
                         <select id="edit-cat" class="w-full bg-gray-900 border border-gray-600 rounded p-2 text-white">
                             ${Object.entries(CATEGORIES).map(([k,v]) => `<option value="${k}" ${k===item.category?'selected':''}>${v.label}</option>`).join('')}
                         </select>
                         <div class="flex gap-2 pt-2">
                             <button onclick="closeModal()" class="flex-1 bg-gray-700 text-white py-2 rounded">Cancel</button>
-                            <button onclick="saveEdit('${id}')" class="flex-1 bg-blue-600 text-white py-2 rounded">Save Changes</button>
+                            <button onclick="saveEdit('${id}')" class="flex-1 bg-blue-600 text-white py-2 rounded">Save</button>
                         </div>
                     </div>
                 </div>
@@ -340,10 +352,9 @@
             } catch (e) { showToast("Failed to update.", "error"); }
         };
 
-        // Home View (Read Only view for Admin)
+        // Home View
         function getHomeHTML() {
             const displayItems = state.currentCategory === 'all' ? state.items : state.items.filter(i => i.category === state.currentCategory);
-            
             let tabsHTML = `<div class="flex overflow-x-auto gap-2 pb-2 mb-6 border-b border-gray-800">
                 <button onclick="setCategory('all')" class="px-4 py-2 rounded-t-lg font-bold ${state.currentCategory === 'all' ? 'bg-gray-800 text-white' : 'text-gray-400'}">All Items</button>`;
             Object.entries(CATEGORIES).forEach(([key, info]) => {
@@ -351,8 +362,8 @@
             });
             tabsHTML += `</div>`;
 
-            const renderCard = (item) => `
-                <div class="bg-gray-800 rounded-xl overflow-hidden shadow-lg border border-gray-700 p-4 relative group">
+            return tabsHTML + `<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">${displayItems.map(item => `
+                <div class="bg-gray-800 rounded-xl overflow-hidden shadow-lg border border-gray-700 p-4 relative">
                     <span class="absolute top-2 right-2 px-2 py-1 text-[10px] rounded font-bold uppercase ${item.status === 'pending' ? 'bg-yellow-500/20 text-yellow-500' : item.status === 'approved' ? 'bg-green-500/20 text-green-500' : 'bg-red-500/20 text-red-500'}">${item.status}</span>
                     <h3 class="text-xl font-bold mb-1 text-white truncate pr-16">${item.title}</h3>
                     <p class="text-gray-400 text-sm mb-3 line-clamp-2">${item.description}</p>
@@ -361,23 +372,21 @@
                         <button onclick="editDocItem('${item.id}')" class="text-blue-400 hover:underline">Edit <i class="fa-solid fa-pen ml-1"></i></button>
                     </div>
                 </div>
-            `;
-
-            return tabsHTML + `<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">${displayItems.map(renderCard).join('')}</div>`;
+            `).join('')}</div>`;
         }
 
-        // Upload/Submit logic for Admin
+        // --- Robust Upload System ---
         window.addDraftFile = () => { state.draftFiles.push({ name: '', type: 'archive', inputType: 'upload', url: '', file: null, id: Date.now() }); renderDraftUI(); };
         window.removeDraftFile = (id) => { state.draftFiles = state.draftFiles.filter(f => f.id !== id); renderDraftUI(); };
         window.updateDraft = (id, f, v) => { const x = state.draftFiles.find(i=>i.id===id); if(x) x[f]=v; if(f==='inputType') renderDraftUI(); };
-        window.handleFile = (id, el) => { const x = state.draftFiles.find(i=>i.id===id); if(x && el.files.length>0) x.file = el.files[0]; };
+        window.handleFile = (id, el) => { const x = state.draftFiles.find(i=>i.id===id); if(x && el.files.length>0) { x.file = el.files[0]; x.name = el.files[0].name; renderDraftUI(); } };
 
         function renderDraftUI() {
             const container = document.getElementById('draft-files-container');
             if(!container) return;
             container.innerHTML = state.draftFiles.map(df => `
                 <div class="bg-gray-900 border border-gray-700 p-4 rounded-xl relative">
-                    <button type="button" onclick="removeDraftFile(${df.id})" class="absolute top-2 right-2 text-red-500 w-8 h-8 rounded"><i class="fa-solid fa-trash"></i></button>
+                    <button type="button" onclick="removeDraftFile(${df.id})" class="absolute top-2 right-2 text-red-500 w-8 h-8 rounded hover:bg-gray-800"><i class="fa-solid fa-trash"></i></button>
                     <div class="grid grid-cols-2 gap-4 mb-2 pr-8">
                         <input type="text" value="${df.name}" onchange="updateDraft(${df.id}, 'name', this.value)" placeholder="File Name" class="w-full bg-gray-800 border-gray-600 rounded p-2 text-white text-sm">
                         <select onchange="updateDraft(${df.id}, 'type', this.value)" class="w-full bg-gray-800 border-gray-600 rounded p-2 text-white text-sm">
@@ -390,7 +399,7 @@
                     </div>
                     ${df.inputType === 'url' 
                         ? `<input type="url" value="${df.url}" onchange="updateDraft(${df.id}, 'url', this.value)" placeholder="External URL" class="w-full bg-gray-800 border-gray-600 rounded p-2 text-white text-sm">` 
-                        : `<input type="file" onchange="handleFile(${df.id}, this)" class="w-full text-sm text-gray-400">`
+                        : `<input type="file" onchange="handleFile(${df.id}, this)" class="w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-bold file:bg-blue-600/20 file:text-blue-400">`
                     }
                 </div>
             `).join('');
@@ -418,7 +427,7 @@
                             </div>
                             <div id="draft-files-container" class="space-y-3"></div>
                         </div>
-                        <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl text-lg shadow-lg">Upload and Auto-Approve</button>
+                        <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl text-lg shadow-lg" id="submit-btn">Upload and Auto-Approve</button>
                     </form>
                 </div>
             `;
@@ -427,12 +436,11 @@
         window.handleAdminSubmit = async (e) => {
             e.preventDefault();
             
-            // 1. Initial Auth Check to prevent hangs
+            // 1. Hard validation
             if (!state.user) {
-                return showToast("Authenticating with server, please wait...", "error");
+                return showToast("Cannot upload: Missing Firebase Auth token. Ensure your domain is authorized.", "error");
             }
 
-            // 2. Strict validation to prevent broken uploads
             for (let f of state.draftFiles) {
                 if (!f.name.trim()) return showToast("All files must have a name.", "error");
                 if (f.inputType === 'upload' && !f.file) return showToast("Please select a file to upload.", "error");
@@ -444,13 +452,14 @@
             const cat = document.getElementById('sub-cat').value;
             const img = document.getElementById('sub-img').value.trim();
 
-            const submitBtn = e.target.querySelector('button[type="submit"]');
+            const submitBtn = document.getElementById('submit-btn');
             submitBtn.disabled = true;
 
             const overlay = document.getElementById('upload-overlay');
             const pBar = document.getElementById('upload-progress-bar');
             const pText = document.getElementById('upload-percentage');
             const statText = document.getElementById('upload-status-text');
+            const cancelBtn = document.getElementById('cancel-upload-btn');
             
             try {
                 let finalFiles = [];
@@ -459,8 +468,8 @@
                 
                 if (uploadCount > 0) {
                     overlay.classList.remove('hidden');
-                    // Give the UI a brief moment to display before the thread gets busy
-                    await new Promise(r => setTimeout(r, 50));
+                    cancelBtn.classList.remove('hidden');
+                    await new Promise(r => setTimeout(r, 50)); // Render flush
                 }
 
                 for (let draft of state.draftFiles) {
@@ -469,27 +478,44 @@
                     if (draft.inputType === 'url') {
                         fileData.url = draft.url.trim();
                     } else {
-                        // Safe formatting for the file name 
                         const safeName = draft.file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
-                        statText.innerText = `Uploading: ${draft.file.name}...`; // Fixed issue: Tells you exactly what is uploading
+                        statText.innerText = `Uploading: ${draft.file.name}`;
+                        pText.innerText = `0% (Contacting Server...)`;
+                        pBar.style.width = '0%';
 
-                        // CRITICAL FIX: Updated to strictly adhere to the Canvas storage rule prefix 
-                        // to prevent permission denied errors hanging the upload task indefinitely.
-                        const fileRef = ref(storage, `artifacts/${appId}/public/data/uploads/${Date.now()}_${safeName}`);
-                        
+                        const fileRef = ref(storage, `artifacts/${appId}/uploads/${Date.now()}_${safeName}`);
                         const uploadTask = uploadBytesResumable(fileRef, draft.file);
+                        state.activeUploadTask = uploadTask; // Save reference so we can force cancel it
                         
                         await new Promise((resolve, reject) => {
+                            let isMoving = false;
+                            
+                            // 10 Second timeout block: If Firebase blocks the domain, it hangs at 0 bytes. 
+                            // This guarantees the UI stops hanging and throws an error to the user.
+                            const connectionTimeout = setTimeout(() => {
+                                if (!isMoving) {
+                                    uploadTask.cancel();
+                                    reject(new Error("Connection Blocked (CORS/Rules). You must set up your own Firebase keys to allow external uploads."));
+                                }
+                            }, 10000);
+
                             uploadTask.on('state_changed', 
                                 (snap) => {
+                                    if (snap.bytesTransferred > 0) {
+                                        isMoving = true;
+                                        clearTimeout(connectionTimeout); // We successfully connected and sent bytes!
+                                    }
+                                    
                                     const prog = (((processedCount * 100) + ((snap.bytesTransferred / snap.totalBytes) * 100)) / uploadCount);
                                     pBar.style.width = prog + '%'; 
-                                    pText.innerText = Math.round(prog) + '%';
+                                    pText.innerText = `${Math.round(prog)}% - (${formatBytes(snap.bytesTransferred)} / ${formatBytes(snap.totalBytes)})`;
                                 }, 
                                 (error) => {
-                                    reject(error); // Push errors up properly so we get a toast instead of an infinite hang
+                                    clearTimeout(connectionTimeout);
+                                    reject(error); // Push error to catch block
                                 }, 
                                 async () => {
+                                    clearTimeout(connectionTimeout);
                                     try {
                                         fileData.url = await getDownloadURL(uploadTask.snapshot.ref); 
                                         resolve();
@@ -505,26 +531,21 @@
                 }
 
                 statText.innerText = "Saving entry to database...";
-
                 await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items'), {
-                    category: cat, 
-                    title, 
-                    description: desc, 
-                    imageUrl: img, 
-                    submitterEmail: 'Admin', 
-                    files: finalFiles, 
-                    status: 'approved', 
-                    createdAt: serverTimestamp()
+                    category: cat, title, description: desc, imageUrl: img, submitterEmail: 'Admin', files: finalFiles, status: 'approved', createdAt: serverTimestamp()
                 });
                 
                 showToast("Uploaded successfully.");
                 navigate('home');
+
             } catch (error) {
-                console.error("Submission Error:", error);
-                showToast("Upload failed: " + error.message, "error");
+                console.error("Upload Aborted:", error);
+                showToast(`Upload Failed: ${error.message}`, "error");
             } finally {
+                state.activeUploadTask = null;
                 submitBtn.disabled = false;
                 overlay.classList.add('hidden');
+                cancelBtn.classList.add('hidden');
                 pBar.style.width = '0%'; 
                 pText.innerText = '0%';
             }
