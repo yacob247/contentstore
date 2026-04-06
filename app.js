@@ -31,11 +31,17 @@
             'other': { label: 'Misc / Other', icon: 'fa-file', color: 'text-gray-400' }
         };
 
-        // Standardized safety filter
-        const INAPPROPRIATE_WORDS = [
-            'porn', 'nude', 'nsfw', 'escort', 'camgirl', 'onlyfans', 'gambling', 'casino', 'betting', 'xxx',
-            'sex', 'fuck', 'shit', 'bitch', 'ass', 'asshole', 'dick', 'cock', 'pussy', 'slut', 'whore', 'bastard', 'crap', 'cunt'
-        ];
+     // Standardized safety filter
+const INAPPROPRIATE_WORDS = [
+    // Your originals
+    'porn', 'nude', 'nsfw', 'escort', 'camgirl', 'onlyfans', 'gambling', 'casino', 'betting', 'xxx',
+    'sex', 'fuck', 'shit', 'bitch', 'ass', 'asshole', 'dick', 'cock', 'pussy', 'slut', 'whore', 'bastard', 'cunt',
+    // New additions
+    'faggot', 'nigger', 'retard', 'motherfucker', 'twat', 'cum', 'anal', 'penis', 'vagina', 'f*ck', 'sh1t'
+];
+
+   
+  
         function containsBadWords(text) {
             if (!text) return false;
             const lowerText = text.toLowerCase();
