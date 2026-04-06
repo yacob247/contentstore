@@ -186,7 +186,7 @@
             await signInAnonymously(auth);
             
             // Setup listener for all documents
-            const q = collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items');
+            const q = collection(db, 'artifacts', appId, 'public', 'data', 'nexus_hub_items');
             onSnapshot(q, snap => {
                 adminItems = snap.docs.map(d => ({id: d.id, ...d.data()}));
                 if(currentTab === 'dashboard') renderDashboard();
