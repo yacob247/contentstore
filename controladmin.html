@@ -20,6 +20,7 @@
 </head>
 <body class="min-h-screen selection:bg-blue-500/30">
 
+    <!-- Login Screen -->
     <div id="login-screen" class="fixed inset-0 z-[100] bg-[#020617] flex items-center justify-center p-6">
         <div class="w-full max-w-md glass p-10 rounded-[2.5rem] text-center shadow-2xl relative overflow-hidden">
             <div class="absolute top-0 left-0 w-full h-1 bg-blue-600"></div>
@@ -35,6 +36,7 @@
         </div>
     </div>
 
+    <!-- Main App -->
     <div id="app" class="hidden flex-col min-h-screen">
         <nav class="sticky top-0 z-50 glass border-x-0 border-t-0 border-b border-slate-800/50">
             <div class="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
@@ -59,6 +61,7 @@
         <main id="view-port" class="max-w-6xl mx-auto p-8 w-full flex-grow"></main>
     </div>
 
+    <!-- Upload Progress Modal -->
     <div id="upload-modal" class="fixed inset-0 z-[110] bg-slate-950/95 backdrop-blur-xl flex items-center justify-center hidden p-6">
         <div class="w-full max-w-lg glass p-12 rounded-[3rem] text-center border-blue-500/20 shadow-3xl">
             <div id="status-icon" class="mb-8">
@@ -79,50 +82,58 @@
                 </div>
             </div>
 
-            <div id="manual-fix" class="hidden mt-8 p-6 bg-red-500/5 border border-red-500/20 rounded-2xl text-left">
-                <h4 class="text-red-500 text-xs font-bold mb-2 uppercase tracking-widest">Automatic Sync Blocked</h4>
-                <p class="text-slate-400 text-[11px] mb-4">Your browser or network blocked the auto-upload. Don't worry, you can still finish the post:</p>
-                <input type="text" id="manual-url" class="w-full bg-black border border-slate-800 rounded-xl p-3 text-xs text-blue-400 outline-none focus:border-blue-500 mb-3" placeholder="Paste link (Google Drive, Mega, etc)">
-                <button onclick="finishWithManualLink()" class="w-full bg-slate-800 hover:bg-slate-700 py-3 rounded-xl text-xs font-bold transition">Save with Manual Link</button>
-            </div>
-
             <button onclick="location.reload()" class="mt-10 text-slate-500 hover:text-white text-[10px] font-black uppercase tracking-[0.3em] transition">Terminate Operation</button>
         </div>
     </div>
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, deleteDoc, doc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        let db, auth, currentView = 'items', pendingData = null;
+        // Firebase Configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyB-3kAk-lMT3jTny2YIs2R1_0mG-tJlmJI",
+            authDomain: "puzzlesapp.firebaseapp.com",
+            databaseURL: "https://puzzlesapp-default-rtdb.firebaseio.com",
+            projectId: "puzzlesapp",
+            storageBucket: "puzzlesapp.firebasestorage.app",
+            messagingSenderId: "303461259730",
+            appId: "1:303461259730:web:a1790a976b6d58d71dd00b",
+            measurementId: "G-8YEJEBX0NE"
+        };
+
+        let db, auth, currentView = 'items';
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'infinite-nexus-v1';
-// For Firebase JS SDK v7.20.0 and later, measurementId is optional
-const firebaseConfig = {
-  apiKey: "AIzaSyB-3kAk-lMT3jTny2YIs2R1_0mG-tJlmJI",
-  authDomain: "puzzlesapp.firebaseapp.com",
-  databaseURL: "https://puzzlesapp-default-rtdb.firebaseio.com",
-  projectId: "puzzlesapp",
-  storageBucket: "puzzlesapp.firebasestorage.app",
-  messagingSenderId: "303461259730",
-  appId: "1:303461259730:web:a1790a976b6d58d71dd00b",
-  measurementId: "G-8YEJEBX0NE"
-};
+
         window.handleAuth = (e) => {
             e.preventDefault();
             if (document.getElementById('pass-key').value === 'password123') {
                 document.getElementById('login-screen').classList.add('hidden');
                 document.getElementById('app').classList.replace('hidden', 'flex');
                 startSession();
-            } else { alert("Access Denied"); }
+            } else { 
+                alert("Access Denied"); 
+            }
         };
 
         async function startSession() {
-            const app = initializeApp(config);
+            const app = initializeApp(firebaseConfig);
             auth = getAuth(app);
             db = getFirestore(app);
-            await signInAnonymously(auth);
-            onAuthStateChanged(auth, u => { if(u) switchView('items'); });
+            
+            // Authentication Protocol
+            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                await signInWithCustomToken(auth, __initial_auth_token);
+            } else {
+                await signInAnonymously(auth);
+            }
+
+            onAuthStateChanged(auth, user => { 
+                if(user) {
+                    switchView('items'); 
+                }
+            });
         }
 
         window.switchView = (v) => {
@@ -134,12 +145,13 @@ const firebaseConfig = {
             const out = document.getElementById('view-port');
             if (currentView === 'items') {
                 out.innerHTML = `<div class="grid gap-8" id="item-feed"></div>`;
-                onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items'), snap => {
+                const q = collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items');
+                onSnapshot(q, snap => {
                     const items = snap.docs.map(d => ({id: d.id, ...d.data()}));
                     document.getElementById('item-feed').innerHTML = `
                         <div class="flex justify-between items-end mb-4">
-                            <h2 class="text-3xl font-black tracking-tighter">Cluster Assets <span class="text-blue-600">.</span></h2>
-                            <p class="text-slate-500 text-sm font-bold uppercase tracking-widest">${items.length} Live Nodes</p>
+                            <h2 class="text-3xl font-black tracking-tighter">Live Cluster Assets <span class="text-blue-600">.</span></h2>
+                            <p class="text-slate-500 text-sm font-bold uppercase tracking-widest">${items.length} Nodes</p>
                         </div>
                         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                             ${items.map(i => `
@@ -155,129 +167,159 @@ const firebaseConfig = {
                                     <h3 class="font-extrabold text-xl mb-2 line-clamp-1">${i.title}</h3>
                                     <p class="text-slate-500 text-sm mb-8 line-clamp-2 leading-relaxed">${i.description}</p>
                                     <div class="flex items-center justify-between pt-5 border-t border-slate-800/50">
-                                        <span class="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500">Active Asset</span>
-                                        <span class="text-[10px] text-slate-600 font-mono">${new Date(i.createdAt?.seconds * 1000).toLocaleDateString()}</span>
+                                        <span class="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500">Status: Approved</span>
+                                        <a href="${i.files?.[0]?.url || '#'}" target="_blank" class="text-[10px] text-slate-400 hover:text-white transition">Verify Link <i class="fa-solid fa-arrow-up-right-from-square ml-1"></i></a>
                                     </div>
                                 </div>
                             `).join('')}
                         </div>
                     `;
+                }, (err) => {
+                    console.error("Firestore Error:", err);
+                    document.getElementById('item-feed').innerHTML = `<p class="text-red-500">Database connection error. Verify Firebase configuration and permissions.</p>`;
                 });
             } else {
                 out.innerHTML = `
-                    <div class="max-w-xl mx-auto py-6 fade-in">
+                    <div class="max-w-2xl mx-auto py-6 fade-in">
                         <form onsubmit="deploy(event)" class="glass p-10 rounded-[3rem] space-y-6 shadow-2xl">
                             <div class="flex items-center gap-4 mb-4">
                                 <div class="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center"><i class="fa-solid fa-cloud-arrow-up text-white text-xl"></i></div>
-                                <div><h2 class="text-2xl font-bold">New Deployment</h2><p class="text-slate-500 text-xs">Public file streaming enabled</p></div>
+                                <div><h2 class="text-2xl font-bold">New Deployment</h2><p class="text-slate-500 text-xs">Public file streaming or external links</p></div>
                             </div>
+                            
                             <div class="space-y-4">
-                                <input id="f-title" required class="w-full bg-slate-950 border border-slate-800 rounded-2xl p-5 focus:border-blue-500 outline-none transition" placeholder="Application Name">
-                                <textarea id="f-desc" required class="w-full bg-slate-950 border border-slate-800 rounded-2xl p-5 h-32 focus:border-blue-500 outline-none transition" placeholder="Detailed description for users..."></textarea>
+                                <div>
+                                    <label class="block text-xs font-black text-slate-500 uppercase tracking-[0.2em] mb-2 ml-1">Asset Information</label>
+                                    <input id="f-title" required class="w-full bg-slate-950 border border-slate-800 rounded-2xl p-5 focus:border-blue-500 outline-none transition mb-3" placeholder="Application Name (e.g. Adobe Premiere Pro)">
+                                    <textarea id="f-desc" required class="w-full bg-slate-950 border border-slate-800 rounded-2xl p-5 h-32 focus:border-blue-500 outline-none transition" placeholder="Detailed description for the user..."></textarea>
+                                </div>
+
                                 <div class="grid grid-cols-2 gap-4">
-                                    <select id="f-cat" class="bg-slate-950 border border-slate-800 rounded-2xl p-5 outline-none focus:border-blue-500">
-                                        <option value="software">Software</option>
-                                        <option value="media">Video/Media</option>
-                                        <option value="docs">Document</option>
-                                    </select>
-                                    <div class="relative group">
-                                        <input type="file" id="f-file" required class="w-full bg-slate-950 border border-slate-800 rounded-2xl p-[18px] text-[10px] text-slate-500 file:bg-blue-600 file:border-0 file:rounded-xl file:px-3 file:py-1.5 file:text-white file:font-black file:mr-4 file:uppercase cursor-pointer">
+                                    <div>
+                                        <label class="block text-xs font-black text-slate-500 uppercase tracking-[0.2em] mb-2 ml-1">Category</label>
+                                        <select id="f-cat" class="w-full bg-slate-950 border border-slate-800 rounded-2xl p-5 outline-none focus:border-blue-500">
+                                            <option value="software">Software</option>
+                                            <option value="media">Multimedia</option>
+                                            <option value="docs">Document/Guide</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-black text-slate-500 uppercase tracking-[0.2em] mb-2 ml-1">File Delivery</label>
+                                        <select id="f-type" onchange="toggleInput(this.value)" class="w-full bg-slate-950 border border-slate-800 rounded-2xl p-5 outline-none focus:border-blue-500">
+                                            <option value="stream">Automatic Stream</option>
+                                            <option value="link">Manual External Link</option>
+                                        </select>
                                     </div>
                                 </div>
+
+                                <div id="input-container">
+                                    <label class="block text-xs font-black text-slate-500 uppercase tracking-[0.2em] mb-2 ml-1">Asset Data</label>
+                                    <input type="file" id="f-file" class="w-full bg-slate-950 border border-slate-800 rounded-2xl p-[18px] text-[10px] text-slate-500 file:bg-blue-600 file:border-0 file:rounded-xl file:px-3 file:py-1.5 file:text-white file:font-black file:mr-4 file:uppercase cursor-pointer">
+                                </div>
                             </div>
-                            <button type="submit" class="w-full btn-primary py-5 rounded-2xl font-black text-lg shadow-xl uppercase tracking-widest mt-4">Start Deployment</button>
+                            
+                            <button type="submit" class="w-full btn-primary py-5 rounded-2xl font-black text-lg shadow-xl uppercase tracking-widest mt-4">Broadcast to Hub</button>
                         </form>
                     </div>
                 `;
             }
         }
 
+        window.toggleInput = (val) => {
+            const container = document.getElementById('input-container');
+            if (val === 'stream') {
+                container.innerHTML = `
+                    <label class="block text-xs font-black text-slate-500 uppercase tracking-[0.2em] mb-2 ml-1">Automatic Upload</label>
+                    <input type="file" id="f-file" required class="w-full bg-slate-950 border border-slate-800 rounded-2xl p-[18px] text-[10px] text-slate-500 file:bg-blue-600 file:border-0 file:rounded-xl file:px-3 file:py-1.5 file:text-white file:font-black file:mr-4 file:uppercase cursor-pointer">
+                `;
+            } else {
+                container.innerHTML = `
+                    <label class="block text-xs font-black text-slate-500 uppercase tracking-[0.2em] mb-2 ml-1">External Resource URL</label>
+                    <input type="url" id="f-url" required class="w-full bg-slate-950 border border-slate-800 rounded-2xl p-5 focus:border-blue-500 outline-none transition" placeholder="Paste link from Mega, G-Drive, Mediafire...">
+                `;
+            }
+        }
+
         window.deploy = async (e) => {
             e.preventDefault();
-            const file = document.getElementById('f-file').files[0];
+            const type = document.getElementById('f-type').value;
             const title = document.getElementById('f-title').value;
             const desc = document.getElementById('f-desc').value;
             const cat = document.getElementById('f-cat').value;
-
-            if(!file) return;
 
             const modal = document.getElementById('upload-modal');
             const bar = document.getElementById('modal-bar');
             const perc = document.getElementById('modal-perc');
             const stat = document.getElementById('modal-status');
-            const bytes = document.getElementById('modal-bytes');
-            
-            modal.classList.remove('hidden');
-            stat.innerText = "Fragmenting data for stream...";
-            bar.style.width = '10%'; perc.innerText = '10%';
-            bytes.innerText = (file.size / 1024).toFixed(0) + " KB Total";
+            const bytesText = document.getElementById('modal-bytes');
 
-            // Save data for manual fallback
-            pendingData = { title, description: desc, category: cat, fileName: file.name };
+            modal.classList.remove('hidden');
+            stat.innerText = "Connecting to transmission node...";
+            bar.style.width = '10%'; perc.innerText = '10%';
+
+            let finalUrl = "";
+            let fileName = "resource.link";
 
             try {
-                // Engine: file.io (Standard public stream)
-                const formData = new FormData();
-                formData.append('file', file);
+                if (type === 'stream') {
+                    const file = document.getElementById('f-file').files[0];
+                    if (!file) throw new Error("No file selected.");
+                    fileName = file.name;
+                    bytesText.innerText = (file.size / (1024 * 1024)).toFixed(2) + " MB Stream";
+                    
+                    stat.innerText = "Syncing data bytes...";
+                    bar.style.width = '40%'; perc.innerText = '40%';
 
-                stat.innerText = "Streaming to Global Cluster...";
-                bar.style.width = '50%'; perc.innerText = '50%';
+                    const formData = new FormData();
+                    formData.append('file', file);
 
-                const res = await fetch('https://file.io/?expires=1w', {
-                    method: 'POST',
-                    body: formData
+                    const res = await fetch('https://file.io/?expires=1w', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if(!res.ok) throw new Error("Network error during stream. Try 'Manual Link' instead.");
+                    const data = await res.json();
+                    if(!data.success) throw new Error(data.message || "Upload rejected.");
+                    
+                    finalUrl = data.link;
+                } else {
+                    finalUrl = document.getElementById('f-url').value;
+                    if (!finalUrl) throw new Error("No URL provided.");
+                }
+
+                stat.innerText = "Updating Hub Registry...";
+                bar.style.width = '85%'; perc.innerText = '85%';
+
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items'), {
+                    title, description: desc, category: cat,
+                    status: 'approved',
+                    createdAt: serverTimestamp(),
+                    files: [{ name: fileName, url: finalUrl, type: cat }]
                 });
 
-                if(!res.ok) throw new Error("CORS_BLOCK");
-                const result = await res.json();
-                
-                if(!result.success) throw new Error("API_REJECT");
-
-                stat.innerText = "Syncing Node Registry...";
-                bar.style.width = '90%'; perc.innerText = '90%';
-
-                await saveToDatabase(result.link);
-                finishUpload();
+                bar.style.width = '100%'; perc.innerText = '100%';
+                stat.innerText = "Deployment Successful!";
+                setTimeout(() => {
+                    modal.classList.add('hidden');
+                    switchView('items');
+                }, 1000);
 
             } catch (err) {
-                console.error("Upload Sync Failed:", err);
-                stat.innerText = "Automatic Stream Blocked.";
-                document.getElementById('status-icon').innerHTML = '<i class="fa-solid fa-circle-exclamation text-5xl text-red-500"></i>';
-                document.getElementById('progress-container').classList.add('hidden');
-                document.getElementById('manual-fix').classList.remove('hidden');
+                console.error(err);
+                alert("DEPLOYMENT ERROR: " + err.message);
+                modal.classList.add('hidden');
             }
         };
 
-        async function saveToDatabase(url) {
-            await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items'), {
-                ...pendingData,
-                status: 'approved',
-                createdAt: serverTimestamp(),
-                files: [{ name: pendingData.fileName, url: url, type: pendingData.category }]
-            });
-        }
-
-        window.finishWithManualLink = async () => {
-            const url = document.getElementById('manual-url').value;
-            if(!url || !url.startsWith('http')) return alert("Please enter a valid URL (Google Drive, Mega, etc)");
-            
-            document.getElementById('manual-fix').innerHTML = '<p class="text-blue-500 animate-pulse font-bold">Saving Node...</p>';
-            await saveToDatabase(url);
-            finishUpload();
-        }
-
-        function finishUpload() {
-            document.getElementById('modal-bar').style.width = '100%';
-            document.getElementById('modal-perc').innerText = '100%';
-            document.getElementById('modal-status').innerText = "Deployment Live!";
-            setTimeout(() => {
-                document.getElementById('upload-modal').classList.add('hidden');
-                switchView('items');
-            }, 1000);
-        }
-
         window.trash = async (id) => {
-            if(confirm("Destroy this asset node?")) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id));
+            if(confirm("Confirm: Permanent removal of this asset from the cluster?")) {
+                try {
+                    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id));
+                } catch (e) {
+                    alert("Delete failed: Check database permissions.");
+                }
+            }
         };
     </script>
 </body>
