@@ -1,6 +1,7 @@
-import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, deleteDoc, doc, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { auditSubmissionDraft } from "./sandbox-auditor.js";
 
 
 
@@ -19,7 +20,8 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebas
             originalItem: null, // Stores item before edits to detect changes
             draftMeta: { title: '', description: '', category: 'collection' },
             draftImage: { inputType: 'url', url: '', file: null },
-            draftFiles: []
+            draftFiles: [],
+            auditErrors: []
         };
 
         const CATEGORIES = {
@@ -32,26 +34,6 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebas
             'archive': { label: 'Archives', icon: 'fa-file-zipper', color: 'text-yellow-500' },
             'other': { label: 'Misc / Other', icon: 'fa-file', color: 'text-gray-400' }
         };
-
-     // Standardized safety filter
-const INAPPROPRIATE_WORDS = [
-    // Your originals
-    'porn', 'nude', 'nsfw', 'escort', 'camgirl', 'onlyfans', 'gambling', 'casino', 'betting', 'xxx',
-    'sex', 'fuck', 'shit', 'bitch', 'ass', 'asshole', 'dick', 'cock', 'pussy', 'slut', 'whore', 'bastard', 'cunt',
-    // New additions
-    'faggot', 'nigger', 'retard', 'motherfucker', 'twat', 'cum', 'anal', 'penis', 'vagina', 'f*ck', 'sh1t'
-];
-
-   
-  
-        function containsBadWords(text) {
-            if (!text) return false;
-            const lowerText = text.toLowerCase();
-            return INAPPROPRIATE_WORDS.some(word => {
-                const regex = new RegExp(`\\b${word}\\b`, 'i');
-                return regex.test(lowerText);
-            });
-        }
 
         let app, auth, db, appId;
         let unsubPublic = null;
@@ -127,6 +109,7 @@ const INAPPROPRIATE_WORDS = [
             state.currentView = view;
             
             if (view === 'submit') {
+                state.auditErrors = [];
                 if (itemId) {
                     const item = state.allItems.find(i => i.id === itemId);
                     if (item) {
@@ -605,15 +588,60 @@ const INAPPROPRIATE_WORDS = [
             return header + `<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">${folderItems.map(renderWorkspaceItem).join('')}</div>`;
         }
 
-        // Edit/Upload Form UI Helpers
-        window.updateDraftMeta = (field, val) => { state.draftMeta[field] = val; };
-        window.updateDraftImage = (field, val) => { state.draftImage[field] = val; if(field==='inputType') render(); };
-        window.handleDraftImageFile = (el) => { if (el.files.length > 0) state.draftImage.file = el.files[0]; };
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
 
-        window.addDraftFile = () => { state.draftFiles.push({ name: '', type: 'archive', inputType: 'upload', url: '', file: null, id: Date.now() }); renderDrafts(); };
-        window.removeDraftFile = (id) => { state.draftFiles = state.draftFiles.filter(f => f.id !== id); renderDrafts(); };
-        window.updateDraft = (id, f, v) => { const x = state.draftFiles.find(i=>i.id===id); if(x) x[f]=v; if(f==='inputType') renderDrafts(); };
-        window.handleFile = (id, el) => { const x = state.draftFiles.find(i=>i.id===id); if(x && el.files.length>0) x.file = el.files[0]; };
+        function getAuditErrorsHTML() {
+            if (!state.auditErrors.length) return '';
+            return `
+                <div class="bg-red-950/60 border border-red-500/40 rounded-xl p-4 shadow-inner">
+                    <div class="flex items-center gap-2 text-red-200 font-bold mb-3">
+                        <i class="fa-solid fa-shield-halved text-red-400"></i>
+                        <span>Security scan blocked this submission</span>
+                    </div>
+                    <div class="space-y-2">
+                        ${state.auditErrors.map(reason => `
+                            <div class="flex items-start gap-3 text-sm text-red-100">
+                                <i class="fa-solid fa-circle-exclamation text-red-400 mt-0.5"></i>
+                                <span>${escapeHtml(reason)}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        function syncAuditErrorsUI() {
+            const container = document.getElementById('audit-errors-container');
+            if (container) container.innerHTML = getAuditErrorsHTML();
+        }
+
+        function clearAuditErrors() {
+            if (!state.auditErrors.length) return;
+            state.auditErrors = [];
+            syncAuditErrorsUI();
+        }
+
+        function setAuditErrors(errors) {
+            state.auditErrors = [...new Set((errors || []).filter(Boolean))];
+            syncAuditErrorsUI();
+        }
+
+        // Edit/Upload Form UI Helpers
+        window.updateDraftMeta = (field, val) => { state.draftMeta[field] = val; clearAuditErrors(); };
+        window.updateDraftImage = (field, val) => { state.draftImage[field] = val; clearAuditErrors(); if(field==='inputType') render(); };
+        window.handleDraftImageFile = (el) => { if (el.files.length > 0) { state.draftImage.file = el.files[0]; clearAuditErrors(); } };
+
+        window.addDraftFile = () => { state.draftFiles.push({ name: '', type: 'archive', inputType: 'upload', url: '', file: null, id: Date.now() }); clearAuditErrors(); renderDrafts(); };
+        window.removeDraftFile = (id) => { state.draftFiles = state.draftFiles.filter(f => f.id !== id); clearAuditErrors(); renderDrafts(); };
+        window.updateDraft = (id, f, v) => { const x = state.draftFiles.find(i=>i.id===id); if(x) x[f]=v; clearAuditErrors(); if(f==='inputType') renderDrafts(); };
+        window.handleFile = (id, el) => { const x = state.draftFiles.find(i=>i.id===id); if(x && el.files.length>0) { x.file = el.files[0]; clearAuditErrors(); } };
 
         function renderDrafts() {
             const container = document.getElementById('draft-files-container');
@@ -694,6 +722,8 @@ const INAPPROPRIATE_WORDS = [
                             <div id="draft-files-container" class="space-y-4"></div>
                         </div>
 
+                        <div id="audit-errors-container">${getAuditErrorsHTML()}</div>
+
                         <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl text-lg shadow-xl shadow-blue-900/20 transition-all transform hover:-translate-y-0.5 flex justify-center items-center gap-3"><i class="fa-solid ${state.editingItemId ? 'fa-floppy-disk' : 'fa-paper-plane'}"></i> ${state.editingItemId ? 'Save Changes' : 'Submit to Hub & Workspace'}</button>
                     </form>
                 </div>
@@ -754,11 +784,7 @@ const INAPPROPRIATE_WORDS = [
             const title = state.draftMeta.title.trim();
             const desc = state.draftMeta.description.trim();
             const folderId = state.draftFolderId || null;
-
-            // Inappropriate language / Bad Word filtering check
-            if (containsBadWords(title) || containsBadWords(desc) || state.draftFiles.some(f => containsBadWords(f.name))) {
-                return showToast("Your submission contains flagged inappropriate language. Please revise your text.", "error");
-            }
+            clearAuditErrors();
 
             for(let f of state.draftFiles) {
                 if(!f.name.trim()) return showToast("All files must have identifying labels.", "error");
@@ -774,9 +800,26 @@ const INAPPROPRIATE_WORDS = [
             overlay.classList.remove('hidden');
 
             try {
+                statText.innerText = `Running client-side security scan...`;
+                const auditResult = await auditSubmissionDraft({
+                    title,
+                    description: desc,
+                    draftImage: state.draftImage,
+                    draftFiles: state.draftFiles,
+                    originalItem: state.originalItem,
+                    isEditing: Boolean(state.editingItemId)
+                });
+
+                if (!auditResult.ok) {
+                    setAuditErrors(auditResult.blockReasons);
+                    showToast(auditResult.blockReasons[0] || "Submission blocked by the security scan.", "error");
+                    return;
+                }
+
+                clearAuditErrors();
+
                 let finalFiles = [], uploadCount = state.draftFiles.filter(f => f.inputType === 'upload').length, processedCount = 0;
-                let isAutoApprove = true;
-                const mediaExts = ['jpg','png','gif','mp4','mov','avi','mkv'];
+                const requiresReapproval = auditResult.requiresReapproval;
 
                 // Handle Cover Image Upload
                 let finalImgUrl = '';
@@ -802,11 +845,7 @@ const INAPPROPRIATE_WORDS = [
                     let fileData = { name: draft.name, type: draft.type };
                     if (draft.inputType === 'url') {
                         fileData.url = draft.url;
-                        if (!getYouTubeId(fileData.url) && !/\.(jpeg|jpg|gif|png)$/i.test(fileData.url)) isAutoApprove = false;
                     } else {
-                        const ext = draft.file.name.match(/\.([^.]+)$/)?.[1].toLowerCase() || '';
-                        if (!mediaExts.includes(ext)) isAutoApprove = false;
-
                         statText.innerText = `Encrypting: ${draft.file.name}...`;
                         const onProgress = (e) => {
                             if (e.lengthComputable) {
@@ -827,28 +866,11 @@ const INAPPROPRIATE_WORDS = [
                 
                 // Smart Re-Approval Logic for Editing
                 let finalStatus = 'pending';
-                let requiresReapproval = false;
 
                 if (state.editingItemId && state.originalItem) {
-                    // Check if image changed
-                    if (finalImgUrl !== (state.originalItem.imageUrl || '')) {
-                        requiresReapproval = true;
-                    }
-                    // Check if files changed (new uploads, changed links, or different file count)
-                    if (finalFiles.length !== (state.originalItem.files || []).length) {
-                        requiresReapproval = true;
-                    } else {
-                        for (let i = 0; i < finalFiles.length; i++) {
-                            if (finalFiles[i].url !== state.originalItem.files[i].url) {
-                                requiresReapproval = true;
-                                break;
-                            }
-                        }
-                    }
-                    
                     finalStatus = requiresReapproval ? 'pending' : state.originalItem.status;
                 } else {
-                    finalStatus = isAutoApprove ? 'approved' : 'pending';
+                    finalStatus = requiresReapproval ? 'pending' : 'approved';
                 }
                 
                 const docData = {
