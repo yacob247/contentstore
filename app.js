@@ -1,4 +1,4 @@
-   import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, deleteDoc, doc, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
@@ -14,6 +14,7 @@
             isLoading: true,
             // Edit & Upload State Extensions
             editingItemId: null,
+            originalItem: null, // Stores item before edits to detect changes
             draftMeta: { title: '', description: '', category: 'collection' },
             draftImage: { inputType: 'url', url: '', file: null },
             draftFiles: []
@@ -29,6 +30,17 @@
             'archive': { label: 'Archives', icon: 'fa-file-zipper', color: 'text-yellow-500' },
             'other': { label: 'Misc / Other', icon: 'fa-file', color: 'text-gray-400' }
         };
+
+        // Standardized safety filter
+        const INAPPROPRIATE_WORDS = ['porn', 'nude', 'nsfw', 'escort', 'camgirl', 'onlyfans', 'gambling', 'casino', 'betting', 'xxx'];
+        function containsBadWords(text) {
+            if (!text) return false;
+            const lowerText = text.toLowerCase();
+            return INAPPROPRIATE_WORDS.some(word => {
+                const regex = new RegExp(`\\b${word}\\b`, 'i');
+                return regex.test(lowerText);
+            });
+        }
 
         let app, auth, db, appId;
         let unsubPublic = null;
@@ -108,6 +120,7 @@
                     const item = state.allItems.find(i => i.id === itemId);
                     if (item) {
                         state.editingItemId = itemId;
+                        state.originalItem = item; // Keep track of the original
                         state.draftFolderId = item.folderId || '';
                         state.draftMeta = { title: item.title, description: item.description, category: item.category };
                         state.draftImage = { inputType: 'url', url: item.imageUrl || '', file: null };
@@ -119,6 +132,7 @@
                     }
                 } else {
                     state.editingItemId = null;
+                    state.originalItem = null;
                     state.draftMeta = { title: '', description: '', category: 'collection' };
                     state.draftImage = { inputType: 'url', url: '', file: null };
                     state.draftFiles = [];
@@ -630,7 +644,7 @@
                                 <i class="fa-solid ${state.editingItemId ? 'fa-pen-to-square' : 'fa-cloud-arrow-up'} text-3xl"></i>
                             </div>
                             <h1 class="text-3xl font-extrabold text-white">${state.editingItemId ? 'Edit Secure Content' : 'Secure Upload Center'}</h1>
-                            <p class="text-gray-400 mt-2 text-sm max-w-lg mx-auto">${state.editingItemId ? 'Updates will resubmit this item for moderation.' : 'Organize your files efficiently by selecting a target folder below.'}</p>
+                            <p class="text-gray-400 mt-2 text-sm max-w-lg mx-auto">${state.editingItemId ? 'Updates to text only will be saved instantly. Changing files requires moderation check.' : 'Organize your files efficiently by selecting a target folder below.'}</p>
                         </div>
 
                         <div class="bg-gray-900 p-6 rounded-xl border border-gray-700 space-y-5 shadow-sm">
@@ -669,7 +683,7 @@
                             <div id="draft-files-container" class="space-y-4"></div>
                         </div>
 
-                        <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl text-lg shadow-xl shadow-blue-900/20 transition-all transform hover:-translate-y-0.5 flex justify-center items-center gap-3"><i class="fa-solid ${state.editingItemId ? 'fa-floppy-disk' : 'fa-paper-plane'}"></i> ${state.editingItemId ? 'Save & Request Approval' : 'Submit to Hub & Workspace'}</button>
+                        <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl text-lg shadow-xl shadow-blue-900/20 transition-all transform hover:-translate-y-0.5 flex justify-center items-center gap-3"><i class="fa-solid ${state.editingItemId ? 'fa-floppy-disk' : 'fa-paper-plane'}"></i> ${state.editingItemId ? 'Save Changes' : 'Submit to Hub & Workspace'}</button>
                     </form>
                 </div>
             `;
@@ -725,6 +739,16 @@
             if (!state.user || state.user.isAnonymous) return showToast("You must log in securely.", "error");
             if (state.draftFiles.length === 0) return showToast("Add at least one file to upload.", "error");
 
+            const cat = state.draftMeta.category;
+            const title = state.draftMeta.title.trim();
+            const desc = state.draftMeta.description.trim();
+            const folderId = state.draftFolderId || null;
+
+            // Inappropriate language / Bad Word filtering check
+            if (containsBadWords(title) || containsBadWords(desc) || state.draftFiles.some(f => containsBadWords(f.name))) {
+                return showToast("Your submission contains flagged inappropriate language. Please revise your text.", "error");
+            }
+
             for(let f of state.draftFiles) {
                 if(!f.name.trim()) return showToast("All files must have identifying labels.", "error");
                 if(f.inputType === 'url' && !f.url.trim()) return showToast("Provide valid URLs for external links.", "error");
@@ -733,11 +757,6 @@
             if(state.draftImage.inputType === 'upload' && !state.draftImage.file && !state.editingItemId) {
                 return showToast("Please select a cover image file, or switch to URL.", "error");
             }
-
-            const cat = state.draftMeta.category;
-            const title = state.draftMeta.title.trim();
-            const desc = state.draftMeta.description.trim();
-            const folderId = state.draftFolderId || null;
 
             e.target.querySelector('button[type="submit"]').disabled = true;
             const overlay = document.getElementById('upload-overlay'), pBar = document.getElementById('upload-progress-bar'), pText = document.getElementById('upload-percentage'), statText = document.getElementById('upload-status-text');
@@ -795,8 +814,31 @@
 
                 statText.innerText = `Verifying Data...`;
                 
-                // If editing, always set to pending to re-check the update. Otherwise autoApprove heuristic.
-                const finalStatus = state.editingItemId ? 'pending' : (isAutoApprove ? 'approved' : 'pending');
+                // Smart Re-Approval Logic for Editing
+                let finalStatus = 'pending';
+                let requiresReapproval = false;
+
+                if (state.editingItemId && state.originalItem) {
+                    // Check if image changed
+                    if (finalImgUrl !== (state.originalItem.imageUrl || '')) {
+                        requiresReapproval = true;
+                    }
+                    // Check if files changed (new uploads, changed links, or different file count)
+                    if (finalFiles.length !== (state.originalItem.files || []).length) {
+                        requiresReapproval = true;
+                    } else {
+                        for (let i = 0; i < finalFiles.length; i++) {
+                            if (finalFiles[i].url !== state.originalItem.files[i].url) {
+                                requiresReapproval = true;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    finalStatus = requiresReapproval ? 'pending' : state.originalItem.status;
+                } else {
+                    finalStatus = isAutoApprove ? 'approved' : 'pending';
+                }
                 
                 const docData = {
                     category: cat, 
@@ -813,7 +855,12 @@
                 if (state.editingItemId) {
                     docData.updatedAt = serverTimestamp();
                     await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', state.editingItemId), docData);
-                    showToast("Item updated successfully! Returned to pending for review.");
+                    
+                    if (requiresReapproval && state.originalItem.status === 'approved') {
+                        showToast("Updates saved! Files were modified, so it has been sent for re-approval.");
+                    } else {
+                        showToast("Text/Metadata updated successfully!");
+                    }
                 } else {
                     docData.createdAt = serverTimestamp();
                     await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items'), docData);
