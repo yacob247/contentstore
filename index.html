@@ -64,7 +64,7 @@
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        import { getStorage, ref, uploadBytesResumable, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
+        // Removed Firebase Storage entirely to fix the "Connection Blocked / No Keys" error!
 
         const ALLOWED_EXTENSIONS = ".pdf,.epub,.txt,.html,.docx,.csv,.json,.xlsx,.pptx,.mp4,.mov,.avi,.mkv,.mp3,.wav,.jpg,.png,.gif,.zip,.rar,.gz,.sqlite,.sql,.dbf,.iso";
 
@@ -88,22 +88,26 @@
             'other': { label: 'Misc / Other', icon: 'fa-file', color: 'text-gray-400' }
         };
 
-        let app, auth, db, storage, appId;
+        let app, auth, db, appId;
 
         async function init() {
             renderLoading();
             try {
+                // Ensure same config as admin!
                 const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
                     apiKey: "AIzaSyB-3kAk-lMT3jTny2YIs2R1_0mG-tJlmJI",
                     authDomain: "puzzlesapp.firebaseapp.com",
+                    databaseURL: "https://puzzlesapp-default-rtdb.firebaseio.com",
                     projectId: "puzzlesapp",
-                    storageBucket: "puzzlesapp.firebasestorage.app"
+                    storageBucket: "puzzlesapp.firebasestorage.app",
+                    messagingSenderId: "303461259730",
+                    appId: "1:303461259730:web:a1790a976b6d58d71dd00b",
+                    measurementId: "G-8YEJEBX0NE"
                 };            
                 app = initializeApp(firebaseConfig);
                 auth = getAuth(app);
                 db = getFirestore(app);
-                storage = getStorage(app);
-                appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+                appId = typeof __app_id !== 'undefined' ? __app_id : 'infinite-nexus-v1'; // Same as Admin file
 
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     await signInWithCustomToken(auth, __initial_auth_token);
@@ -418,6 +422,51 @@
             `;
         }
 
+        // Custom API Uploader
+        async function uploadToFreeHost(file, onProgress) {
+            try {
+                const srvRes = await fetch('https://api.gofile.io/servers');
+                const srvJson = await srvRes.json();
+                if(srvJson.status !== 'ok') throw new Error("Gofile offline");
+                const server = srvJson.data.servers[0].name;
+
+                const formData = new FormData();
+                formData.append('file', file);
+                
+                return await new Promise((resolve, reject) => {
+                    const xhr = new XMLHttpRequest();
+                    xhr.open('POST', `https://${server}.gofile.io/contents/uploadfile`);
+                    xhr.upload.onprogress = onProgress;
+                    xhr.onload = () => {
+                        if (xhr.status === 200) {
+                            const res = JSON.parse(xhr.responseText);
+                            if(res.status === 'ok') resolve(res.data.downloadPage);
+                            else reject(new Error(res.status));
+                        } else reject(new Error(xhr.status));
+                    };
+                    xhr.onerror = () => reject(new Error("Network Error"));
+                    xhr.send(formData);
+                });
+            } catch (err) {
+                const formData = new FormData();
+                formData.append('file', file);
+                return await new Promise((resolve, reject) => {
+                    const xhr = new XMLHttpRequest();
+                    xhr.open('POST', 'https://tmpfiles.org/api/v1/upload');
+                    xhr.upload.onprogress = onProgress;
+                    xhr.onload = () => {
+                        if (xhr.status === 200) {
+                            const res = JSON.parse(xhr.responseText);
+                            if(res.status === 'success') resolve(res.data.url.replace('tmpfiles.org/', 'tmpfiles.org/dl/'));
+                            else reject(new Error("Fallback failed"));
+                        } else reject(new Error(xhr.status));
+                    };
+                    xhr.onerror = () => reject(new Error("All hosts blocked"));
+                    xhr.send(formData);
+                });
+            }
+        }
+
         window.handleSubmission = async (e) => {
             e.preventDefault();
             if (!state.user || state.user.isAnonymous) return showToast("You must log in.", "error");
@@ -453,25 +502,26 @@
                         const ext = draft.file.name.match(/\.([^.]+)$/)?.[1].toLowerCase() || '';
                         if (!mediaExts.includes(ext)) isAutoApprove = false;
 
-                        statText.innerText = `Uploading: ${draft.file.name}...`;
-                        const fileRef = ref(storage, `artifacts/${appId}/uploads/${Date.now()}_${draft.file.name}`);
-                        const uploadTask = uploadBytesResumable(fileRef, draft.file);
+                        statText.innerText = `Preparing: ${draft.file.name}...`;
                         
-                        await new Promise((resolve, reject) => {
-                            uploadTask.on('state_changed', 
-                                (snap) => {
-                                    const prog = (((processedCount * 100) + ((snap.bytesTransferred / snap.totalBytes) * 100)) / uploadCount);
-                                    pBar.style.width = prog + '%'; pText.innerText = Math.round(prog) + '%';
-                                }, 
-                                reject, 
-                                async () => { fileData.url = await getDownloadURL(uploadTask.snapshot.ref); resolve(); }
-                            );
-                        });
+                        const onProgress = (e) => {
+                            if (e.lengthComputable) {
+                                const prog = (((processedCount * 100) + ((e.loaded / e.total) * 100)) / uploadCount);
+                                pBar.style.width = prog + '%'; 
+                                pText.innerText = Math.round(prog) + '%';
+                                const mb = Math.round((e.loaded/1024/1024)*10)/10;
+                                statText.innerText = `Uploading: ${mb} MB...`;
+                            }
+                        };
+                        
+                        // Send straight to free file host API
+                        fileData.url = await uploadToFreeHost(draft.file, onProgress);
                         processedCount++;
                     }
                     finalFiles.push(fileData);
                 }
 
+                statText.innerText = `Syncing with Database...`;
                 const finalStatus = isAutoApprove ? 'approved' : 'pending';
                 await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items'), {
                     category: cat, title, description: desc, imageUrl: img, submitterEmail: state.user.email, files: finalFiles, status: finalStatus, createdAt: serverTimestamp()
