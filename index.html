@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Nexus Content Hub | Secure & Verified Downloads</title>
+    <title>Content Store | Secure & Verified Downloads</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
@@ -26,7 +26,7 @@
             <div class="flex items-center justify-between h-16">
                 <div class="flex items-center gap-3 cursor-pointer" onclick="navigate('home')">
                     <i class="fa-solid fa-layer-group text-blue-500 text-2xl"></i>
-                    <span class="font-bold text-xl tracking-tight text-white">Nexus<span class="text-blue-500">Hub</span></span>
+                    <span class="font-bold text-xl tracking-tight text-white">Content<span class="text-blue-500">Store</span></span>
                 </div>
                 <div class="flex items-center gap-2 sm:gap-4 overflow-x-auto hide-scrollbar">
                     <button onclick="navigate('home')" class="nav-btn text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium transition-colors" data-view="home">Mainstreams</button>
@@ -60,10 +60,10 @@
                 <div class="col-span-1 md:col-span-1">
                     <div class="flex items-center gap-2 mb-4">
                         <i class="fa-solid fa-layer-group text-blue-500 text-xl"></i>
-                        <span class="font-bold text-lg tracking-tight text-white">Nexus<span class="text-blue-500">Hub</span></span>
+                        <span class="font-bold text-lg tracking-tight text-white">Content<span class="text-blue-500">Store</span></span>
                     </div>
                     <p class="text-gray-400 text-sm leading-relaxed">
-                        Envizion Work brings you NexusHub - a securely moderated, community-driven platform for high-quality digital content. We prioritize your digital safety and privacy above all else.
+                        Envizion Work brings you ContentStore - a securely moderated, community-driven platform for high-quality digital content. We prioritize your digital safety and privacy above all else.
                     </p>
                 </div>
 
@@ -179,7 +179,7 @@
                 app = initializeApp(firebaseConfig);
                 auth = getAuth(app);
                 db = getFirestore(app);
-                appId = typeof __app_id !== 'undefined' ? __app_id : 'infinite-nexus-v1';
+                appId = typeof __app_id !== 'undefined' ? __app_id : 'infinite-Content-v1';
 
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     await signInWithCustomToken(auth, __initial_auth_token);
@@ -199,7 +199,7 @@
 
         function setupDataListener() {
             if (!state.user) return;
-            const itemsRef = collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items');
+            const itemsRef = collection(db, 'artifacts', appId, 'public', 'data', 'content_Store_items');
             
             onSnapshot(itemsRef, (snapshot) => {
                 state.items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(i => i.status === 'approved');
@@ -284,7 +284,7 @@
                     </div>
                     <div class="text-gray-300 space-y-4 text-sm leading-relaxed">
                         <p><strong>Last Updated: April 6, 2026</strong></p>
-                        <p>Welcome to Envizion Work's Content Hub. Your privacy, security, and trust are our highest priorities. This document outlines our standard operating procedures.</p>
+                        <p>Welcome to Envizion Work's Content Store. Your privacy, security, and trust are our highest priorities. This document outlines our standard operating procedures.</p>
                         <h3 class="text-lg font-bold text-white mt-6 mb-2">1. Data Security & Encryption</h3>
                         <p>We utilize AES-256 bit encryption for all data transmissions. We do not sell, rent, or distribute your personal information to third-party data brokers under any circumstances.</p>
                         <h3 class="text-lg font-bold text-white mt-6 mb-2">2. Community Moderation</h3>
@@ -449,7 +449,7 @@
             <div class="mt-20 mb-8 fade-in border-t border-gray-800 pt-12">
                 <div class="text-center mb-10">
                     <h2 class="text-3xl font-bold text-white mb-2">Trusted by the Community</h2>
-                    <p class="text-gray-400">See what our verified users are saying about NexusHub's reliability.</p>
+                    <p class="text-gray-400">See what our verified users are saying about ContentStore's reliability.</p>
                 </div>
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                     <div class="bg-gray-800/50 p-6 rounded-2xl border border-gray-700 relative hover:border-gray-600 transition-colors">
@@ -479,7 +479,7 @@
                     <div class="bg-gray-800/50 p-6 rounded-2xl border border-gray-700 relative hover:border-gray-600 transition-colors">
                         <i class="fa-solid fa-quote-right absolute top-6 right-6 text-4xl text-gray-700/50"></i>
                         <div class="flex text-yellow-500 text-xs mb-4"><i class="fa-solid fa-star"></i><i class="fa-solid fa-star"></i><i class="fa-solid fa-star"></i><i class="fa-solid fa-star"></i><i class="fa-solid fa-star-half-stroke"></i></div>
-                        <p class="text-gray-300 text-sm mb-6 leading-relaxed">"Finally, a content hub that actually looks legitimate. Excellent customer support from the Envizion team too."</p>
+                        <p class="text-gray-300 text-sm mb-6 leading-relaxed">"Finally, a content Store that actually looks legitimate. Excellent customer support from the Envizion team too."</p>
                         <div class="flex items-center gap-3">
                             <img src="https://ui-avatars.com/api/?name=Elena+R&background=8b5cf6&color=fff" class="w-10 h-10 rounded-full">
                             <div>
@@ -723,7 +723,7 @@
 
                 statText.innerText = `Verifying & Syncing...`;
                 const finalStatus = isAutoApprove ? 'approved' : 'pending';
-                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items'), {
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'content_Store_items'), {
                     category: cat, title, description: desc, imageUrl: img, submitterEmail: state.user.email, files: finalFiles, status: finalStatus, createdAt: serverTimestamp()
                 });
                 
