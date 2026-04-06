@@ -115,6 +115,49 @@
         </div>
     </div>
 
+    <!-- Edit Modal -->
+    <div id="edit-modal" class="fixed inset-0 z-[120] bg-gray-950/90 backdrop-blur-md hidden items-center justify-center p-6 opacity-0 transition-opacity duration-300">
+        <div class="w-full max-w-lg glass-card p-8 rounded-[2rem] shadow-2xl border-blue-500/20 transform scale-95 transition-transform duration-300" id="edit-modal-content">
+            <div class="flex justify-between items-center mb-6">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 bg-blue-500/10 rounded-full flex items-center justify-center text-blue-500">
+                        <i class="fa-solid fa-pen-to-square"></i>
+                    </div>
+                    <h2 class="text-xl font-bold">Edit Asset</h2>
+                </div>
+                <button onclick="closeEditModal()" class="text-gray-500 hover:text-white transition">
+                    <i class="fa-solid fa-xmark text-xl"></i>
+                </button>
+            </div>
+            
+            <form onsubmit="processEdit(event)" class="space-y-4">
+                <div>
+                    <label class="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-2 ml-1">Asset Name</label>
+                    <input type="text" id="edit-title" required class="w-full bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 text-sm focus:border-blue-500 outline-none transition">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-2 ml-1">Category</label>
+                    <select id="edit-cat" class="w-full bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 text-sm focus:border-blue-500 outline-none transition">
+                        <option value="software">Software / Apps</option>
+                        <option value="media">Movies / Videos</option>
+                        <option value="docs">Guides / PDFs</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-2 ml-1">Description</label>
+                    <textarea id="edit-desc" required class="w-full bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 h-28 text-sm focus:border-blue-500 outline-none transition resize-none"></textarea>
+                </div>
+                <div class="pt-2 flex gap-3">
+                    <button type="button" onclick="closeEditModal()" class="flex-1 bg-gray-800 hover:bg-gray-700 py-3 rounded-xl font-bold transition">Cancel</button>
+                    <button type="submit" id="edit-submit-btn" class="flex-1 bg-blue-600 hover:bg-blue-700 py-3 rounded-xl font-bold flex justify-center items-center gap-2 transition">
+                        <span>Save Changes</span>
+                        <i class="fa-solid fa-floppy-disk text-sm"></i>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- Custom Confirm Delete Modal -->
     <div id="confirm-modal" class="fixed inset-0 z-[120] bg-gray-950/90 backdrop-blur-md hidden items-center justify-center p-6 opacity-0 transition-opacity duration-300">
         <div class="w-full max-w-sm glass-card p-8 rounded-[2rem] text-center shadow-2xl border-red-500/20 transform scale-95 transition-transform duration-300" id="confirm-modal-content">
@@ -161,6 +204,7 @@
         let db, auth, currentTab = 'dashboard';
         let itemToDelete = null;
         let rejectContext = { id: null, title: '' };
+        let editContext = { id: null };
         
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'infinite-nexus-v1';
 
@@ -277,6 +321,7 @@
                                 const isRejected = i.status === 'rejected';
                                 const statusColor = isRejected ? 'status-rejected' : (i.status === 'pending' ? 'status-pending' : 'status-online');
                                 const statusText = i.status ? i.status.toUpperCase() : 'APPROVED';
+                                const esc = str => (str || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
                                 
                                 return `
                                 <div class="glass-card p-6 rounded-3xl ${isRejected ? 'border-red-500/20 opacity-80' : 'hover:border-blue-500/50'} transition-all group fade-in relative overflow-hidden flex flex-col">
@@ -291,11 +336,19 @@
                                             </div>
                                         </div>
                                         <div class="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                            ${i.status !== 'approved' ? `
+                                            <button onclick="approveItem('${i.id}')" class="w-8 h-8 rounded-full bg-green-500/10 text-green-500 flex items-center justify-center hover:bg-green-500 hover:text-white transition" title="Approve">
+                                                <i class="fa-solid fa-check text-sm"></i>
+                                            </button>
+                                            ` : ''}
                                             ${!isRejected ? `
-                                            <button onclick="openRejectModal('${i.id}', '${(i.title || '').replace(/'/g, "\\'")}', '${i.uploaderEmail || ''}')" class="w-8 h-8 rounded-full bg-orange-500/10 text-orange-500 flex items-center justify-center hover:bg-orange-500 hover:text-white transition" title="Reject & Email">
+                                            <button onclick="openRejectModal('${i.id}', '${esc(i.title)}', '${i.uploaderEmail || ''}')" class="w-8 h-8 rounded-full bg-orange-500/10 text-orange-500 flex items-center justify-center hover:bg-orange-500 hover:text-white transition" title="Reject & Email">
                                                 <i class="fa-solid fa-ban text-sm"></i>
                                             </button>
                                             ` : ''}
+                                            <button onclick="openEditModal('${i.id}', '${esc(i.title)}', '${esc(i.description)}', '${i.category}')" class="w-8 h-8 rounded-full bg-blue-500/10 text-blue-500 flex items-center justify-center hover:bg-blue-500 hover:text-white transition" title="Edit">
+                                                <i class="fa-solid fa-pen text-sm"></i>
+                                            </button>
                                             <button onclick="confirmRemoveItem('${i.id}')" class="w-8 h-8 rounded-full bg-red-500/10 text-red-500 flex items-center justify-center hover:bg-red-500 hover:text-white transition" title="Delete Permanent">
                                                 <i class="fa-solid fa-trash-can text-sm"></i>
                                             </button>
@@ -456,6 +509,91 @@
             } catch (err) {
                 console.error("Rejection Error:", err);
                 showToast("Error processing rejection: " + err.message, "error");
+            } finally {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+            }
+        };
+
+        // --- Approve & Edit Logic ---
+
+        window.approveItem = async (id) => {
+            try {
+                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id), {
+                    status: 'approved',
+                    approvedAt: serverTimestamp()
+                });
+                showToast("Item approved successfully!", "success");
+            } catch (err) {
+                console.error("Approval Error:", err);
+                showToast("Error approving item: " + err.message, "error");
+            }
+        };
+
+        window.openEditModal = (id, title, desc, cat) => {
+            editContext = { id };
+            const modal = document.getElementById('edit-modal');
+            const content = document.getElementById('edit-modal-content');
+            
+            // Unescape entities for the form inputs
+            const unescapeStr = str => {
+                const txt = document.createElement('textarea');
+                txt.innerHTML = str;
+                return txt.value;
+            };
+
+            document.getElementById('edit-title').value = unescapeStr(title);
+            document.getElementById('edit-desc').value = unescapeStr(desc);
+            document.getElementById('edit-cat').value = cat || 'software';
+            
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+            
+            setTimeout(() => {
+                modal.classList.remove('opacity-0');
+                content.classList.remove('scale-95');
+            }, 10);
+        };
+
+        window.closeEditModal = () => {
+            const modal = document.getElementById('edit-modal');
+            const content = document.getElementById('edit-modal-content');
+            
+            modal.classList.add('opacity-0');
+            content.classList.add('scale-95');
+            
+            setTimeout(() => {
+                modal.classList.add('hidden');
+                modal.classList.remove('flex');
+                editContext = { id: null };
+            }, 300);
+        };
+
+        window.processEdit = async (e) => {
+            e.preventDefault();
+            const btn = document.getElementById('edit-submit-btn');
+            const originalText = btn.innerHTML;
+            
+            const title = document.getElementById('edit-title').value;
+            const desc = document.getElementById('edit-desc').value;
+            const cat = document.getElementById('edit-cat').value;
+
+            btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Saving...';
+            btn.disabled = true;
+
+            try {
+                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', editContext.id), {
+                    title: title,
+                    description: desc,
+                    category: cat,
+                    updatedAt: serverTimestamp()
+                });
+
+                showToast("Changes saved successfully!", "success");
+                closeEditModal();
+            } catch (err) {
+                console.error("Edit Error:", err);
+                showToast("Error saving changes: " + err.message, "error");
             } finally {
                 btn.innerHTML = originalText;
                 btn.disabled = false;
