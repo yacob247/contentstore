@@ -1,23 +1,14 @@
 import {
+  ALLOW_EXTERNAL_URLS,
+  ALWAYS_REQUIRE_MANUAL_REVIEW,
+  BLOCKED_FILE_EXTENSIONS,
   FILE_HEADER_SIGNATURES,
   FINDING_TEMPLATES,
   FIX_REQUIRED_SIGNATURES,
   MALICIOUS_SIGNATURES,
-  RESTRICTED_TERMS,
   SAFE_URL_PROTOCOLS,
   SCAN_BYTE_LIMIT
 } from "./sandbox-rules.js";
-
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function normalizeSearchText(value) {
-  return String(value || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
 
 function fillTemplate(template, values) {
   return template.replace(/\{\{(\w+)\}\}/g, (_, key) => String(values[key] ?? ""));
@@ -30,6 +21,19 @@ function buildReason(type, values) {
 function getFileExtension(name) {
   const match = /\.([^.]+)$/.exec(name || "");
   return match ? match[1].toLowerCase() : "";
+}
+
+function readUInt16LE(bytes, offset) {
+  return bytes[offset] | (bytes[offset + 1] << 8);
+}
+
+function readUInt32LE(bytes, offset) {
+  return (
+    bytes[offset] |
+    (bytes[offset + 1] << 8) |
+    (bytes[offset + 2] << 16) |
+    (bytes[offset + 3] << 24)
+  ) >>> 0;
 }
 
 function hasSignature(bytes, signature) {
@@ -63,32 +67,18 @@ function isChangedValue(currentValue, originalValue) {
   return String(currentValue || "") !== String(originalValue || "");
 }
 
-function collectRestrictedTextFindings(text, field) {
-  const normalizedText = normalizeSearchText(text);
-  if (!normalizedText) return [];
-
-  const findings = [];
-  for (const term of RESTRICTED_TERMS) {
-    const normalizedTerm = normalizeSearchText(term);
-    if (!normalizedTerm) continue;
-
-    const regex = new RegExp(`(?:^|\\s)${escapeRegExp(normalizedTerm)}(?=\\s|$)`, "i");
-    if (regex.test(normalizedText)) {
-      findings.push(
-        makeFinding(
-          "restricted_text",
-          buildReason("restricted_text", { field, term }),
-          { blocking: true, field, term }
-        )
-      );
-    }
-  }
-
-  return dedupeFindings(findings);
-}
-
 function collectUrlValidationFindings(url, field) {
   if (!url) return [];
+
+  if (!ALLOW_EXTERNAL_URLS) {
+    return [
+      makeFinding(
+        "external_urls_disabled",
+        buildReason("external_urls_disabled", { field }),
+        { blocking: true, field }
+      )
+    ];
+  }
 
   try {
     const parsed = new URL(url);
@@ -116,11 +106,94 @@ async function readFileSample(file) {
   return { bytes, lowerText };
 }
 
+function extractZipEntryNames(bytes, extension) {
+  if (!["zip", "jar", "apk", "docx", "xlsx", "pptx"].includes(extension)) return [];
+
+  const decoder = new TextDecoder();
+  const names = [];
+
+  for (let index = 0; index <= bytes.length - 30; ) {
+    const isLocalFileHeader =
+      bytes[index] === 0x50 &&
+      bytes[index + 1] === 0x4b &&
+      bytes[index + 2] === 0x03 &&
+      bytes[index + 3] === 0x04;
+
+    if (!isLocalFileHeader) {
+      index += 1;
+      continue;
+    }
+
+    const fileNameLength = readUInt16LE(bytes, index + 26);
+    const extraFieldLength = readUInt16LE(bytes, index + 28);
+    const compressedSize = readUInt32LE(bytes, index + 18);
+    const nameStart = index + 30;
+    const nameEnd = nameStart + fileNameLength;
+
+    if (nameEnd > bytes.length) break;
+
+    const entryName = decoder.decode(bytes.slice(nameStart, nameEnd)).replace(/\0/g, "").trim();
+    if (entryName) names.push(entryName);
+
+    const nextIndex = nameEnd + extraFieldLength + compressedSize;
+    index = nextIndex > index ? nextIndex : index + 4;
+  }
+
+  return [...new Set(names)];
+}
+
+function findPatternMatch({ lowerText, archiveEntryNames }, patterns) {
+  for (const pattern of patterns) {
+    const lowerPattern = pattern.toLowerCase();
+
+    const matchedEntryName = archiveEntryNames.find((entryName) => entryName.toLowerCase().includes(lowerPattern));
+    if (matchedEntryName) {
+      return { matchedPattern: pattern, source: "archive_entry_name", detail: matchedEntryName };
+    }
+
+    if (lowerText.includes(lowerPattern)) {
+      return { matchedPattern: pattern, source: "file_content" };
+    }
+  }
+
+  return null;
+}
+
+function buildSignatureReason(name, ruleMessage, match, mode) {
+  const prefix = mode === "malicious" ? "was blocked" : "needs changes before it can be posted";
+
+  if (match?.source === "archive_entry_name") {
+    return `${name} ${prefix} because archive metadata contains the entry name "${match.detail}", which matched "${match.matchedPattern}" (${ruleMessage})`;
+  }
+
+  if (match?.matchedPattern) {
+    return `${name} ${prefix} because its scanned bytes matched "${match.matchedPattern}" (${ruleMessage})`;
+  }
+
+  return buildReason(mode === "malicious" ? "malicious_signature" : "fix_required", {
+    name,
+    message: ruleMessage
+  });
+}
+
 async function collectLocalFileFindings(file, displayName) {
   const name = file?.name || displayName || "Uploaded file";
   if (!file) return [];
 
   const findings = [];
+  const extension = getFileExtension(name);
+
+  if (BLOCKED_FILE_EXTENSIONS.includes(extension)) {
+    findings.push(
+      makeFinding(
+        "blocked_extension",
+        buildReason("blocked_extension", { name, extension }),
+        { blocking: true, fileName: name, extension }
+      )
+    );
+    return findings;
+  }
+
   if (file.size === 0) {
     findings.push(
       makeFinding(
@@ -136,8 +209,8 @@ async function collectLocalFileFindings(file, displayName) {
   }
 
   const { bytes, lowerText } = await readFileSample(file);
-  const extension = getFileExtension(name);
   const headerRule = FILE_HEADER_SIGNATURES.find((rule) => rule.extensions.includes(extension));
+  const archiveEntryNames = extractZipEntryNames(bytes, extension);
 
   if (headerRule && !hasSignature(bytes, headerRule.signature)) {
     findings.push(
@@ -153,17 +226,21 @@ async function collectLocalFileFindings(file, displayName) {
   }
 
   for (const rule of MALICIOUS_SIGNATURES) {
-    const matchedPattern = rule.patterns.find((pattern) => lowerText.includes(pattern.toLowerCase()));
-    if (!matchedPattern) continue;
+    const match = findPatternMatch({ lowerText, archiveEntryNames }, rule.patterns);
+    if (!match) continue;
 
     findings.push(
       makeFinding(
         "malicious_signature",
-        buildReason("malicious_signature", {
-          name,
-          message: rule.message
-        }),
-        { blocking: true, fileName: name, ruleId: rule.id, matchedPattern }
+        buildSignatureReason(name, rule.message, match, "malicious"),
+        {
+          blocking: true,
+          fileName: name,
+          ruleId: rule.id,
+          matchedPattern: match.matchedPattern,
+          matchSource: match.source,
+          matchDetail: match.detail
+        }
       )
     );
   }
@@ -173,17 +250,21 @@ async function collectLocalFileFindings(file, displayName) {
   }
 
   for (const rule of FIX_REQUIRED_SIGNATURES) {
-    const matchedPattern = rule.patterns.find((pattern) => lowerText.includes(pattern.toLowerCase()));
-    if (!matchedPattern) continue;
+    const match = findPatternMatch({ lowerText, archiveEntryNames }, rule.patterns);
+    if (!match) continue;
 
     findings.push(
       makeFinding(
         "fix_required",
-        buildReason("fix_required", {
-          name,
-          message: rule.message
-        }),
-        { blocking: true, fileName: name, ruleId: rule.id, matchedPattern }
+        buildSignatureReason(name, rule.message, match, "fix_required"),
+        {
+          blocking: true,
+          fileName: name,
+          ruleId: rule.id,
+          matchedPattern: match.matchedPattern,
+          matchSource: match.source,
+          matchDetail: match.detail
+        }
       )
     );
   }
@@ -201,8 +282,6 @@ function collectReviewOnlyFinding(field, type) {
 }
 
 export async function auditSubmissionDraft({
-  title,
-  description,
   draftImage,
   draftFiles,
   originalItem,
@@ -212,24 +291,19 @@ export async function auditSubmissionDraft({
   const normalizedDraftFiles = Array.isArray(draftFiles) ? draftFiles : [];
   const originalFiles = Array.isArray(originalItem?.files) ? originalItem.files : [];
 
-  findings.push(...collectRestrictedTextFindings(title, "Display Title"));
-  findings.push(...collectRestrictedTextFindings(description, "Detailed Description"));
-
-  normalizedDraftFiles.forEach((draft, index) => {
-    findings.push(...collectRestrictedTextFindings(draft?.name, `File Label ${index + 1}`));
-  });
-
   if (isEditing && normalizedDraftFiles.length !== originalFiles.length) {
     findings.push(collectReviewOnlyFinding("Attached files", "source_change"));
   }
 
   if (draftImage?.inputType === "url") {
-    findings.push(...collectUrlValidationFindings(draftImage.url, "Cover Image URL"));
-
     const currentImageUrl = (draftImage.url || "").trim();
     const originalImageUrl = originalItem?.imageUrl || "";
     const hasNewExternalImage = currentImageUrl && (!isEditing || isChangedValue(currentImageUrl, originalImageUrl));
     const hasRemovedImage = isEditing && !currentImageUrl && originalImageUrl;
+
+    if (hasNewExternalImage) {
+      findings.push(...collectUrlValidationFindings(currentImageUrl, "Cover Image URL"));
+    }
 
     if (hasNewExternalImage) {
       findings.push(collectReviewOnlyFinding("Cover Image URL", "external_url"));
@@ -246,10 +320,15 @@ export async function auditSubmissionDraft({
     const fieldLabel = `File URL ${index + 1}`;
 
     if (draft?.inputType === "url") {
-      findings.push(...collectUrlValidationFindings(draft.url, fieldLabel));
       const currentUrl = (draft.url || "").trim();
       const originalUrl = getOriginalFileUrl(originalItem, index);
-      if (currentUrl && (!isEditing || isChangedValue(currentUrl, originalUrl))) {
+      const hasNewExternalUrl = currentUrl && (!isEditing || isChangedValue(currentUrl, originalUrl));
+
+      if (hasNewExternalUrl) {
+        findings.push(...collectUrlValidationFindings(currentUrl, fieldLabel));
+      }
+
+      if (hasNewExternalUrl) {
         findings.push(collectReviewOnlyFinding(fieldLabel, "external_url"));
       }
     } else if (draft?.inputType === "upload" && draft.file) {
@@ -260,11 +339,13 @@ export async function auditSubmissionDraft({
 
   const uniqueFindings = dedupeFindings(findings);
   const blockReasons = dedupeReasons(uniqueFindings.filter((finding) => finding.blocking).map((finding) => finding.reason));
+  const reviewOnlyTriggered = uniqueFindings.some((finding) => finding.type === "review_only");
+  const requiresManualReview = ALWAYS_REQUIRE_MANUAL_REVIEW && !isEditing;
 
   return {
     ok: blockReasons.length === 0,
     blockReasons,
-    requiresReapproval: uniqueFindings.some((finding) => finding.type === "review_only"),
+    requiresReapproval: reviewOnlyTriggered || requiresManualReview,
     findings: uniqueFindings
   };
 }
