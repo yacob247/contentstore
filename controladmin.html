@@ -32,7 +32,7 @@
         .status-online { background: #10b981; box-shadow: 0 0 8px #10b981; }
     </style>
 </head>
-<body class="min-h-screen">
+<body class="min-h-screen flex flex-col">
 
     <!-- Access Lock -->
     <div id="auth-overlay" class="fixed inset-0 z-[100] bg-gray-950 flex items-center justify-center p-6">
@@ -65,13 +65,17 @@
                 <nav class="flex items-center gap-8">
                     <button onclick="setTab('dashboard')" class="text-sm font-semibold hover:text-blue-400 transition" id="tab-dash">Dashboard</button>
                     <button onclick="setTab('upload')" class="bg-blue-600 hover:bg-blue-700 px-6 py-2.5 rounded-xl text-sm font-bold transition shadow-lg">New Deployment</button>
-                    <button onclick="location.reload()" class="text-gray-500 hover:text-red-400 transition"><i class="fa-solid fa-power-off text-lg"></i></button>
+                    <button onclick="location.reload()" class="text-gray-500 hover:text-red-400 transition" title="Lock Console"><i class="fa-solid fa-power-off text-lg"></i></button>
                 </nav>
             </div>
         </header>
 
-        <main id="main-content" class="max-w-6xl mx-auto p-8 w-full"></main>
+        <main id="main-content" class="flex-grow max-w-7xl mx-auto p-8 w-full"></main>
     </div>
+
+    <!-- Global Modals & Toasts -->
+    <div id="modal-container" onclick="if(event.target === this) closeModal()" class="fixed inset-0 bg-black/80 flex items-center justify-center z-[150] hidden opacity-0 transition-opacity duration-300 backdrop-blur-md p-4"></div>
+    <div id="toast-container" class="fixed bottom-4 right-4 z-[200] flex flex-col gap-2 pointer-events-none"></div>
 
     <!-- Smart Upload Processing Overlay -->
     <div id="processing-overlay" class="fixed inset-0 z-[110] bg-gray-950/95 backdrop-blur-xl flex items-center justify-center hidden p-6">
@@ -99,12 +103,13 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, deleteDoc, doc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, deleteDoc, doc, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         let db, auth, currentTab = 'dashboard';
+        let adminItems = []; // Store fetched items
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'infinite-nexus-v1';
 
-        const firebaseConfig = {
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
           apiKey: "AIzaSyB-3kAk-lMT3jTny2YIs2R1_0mG-tJlmJI",
           authDomain: "puzzlesapp.firebaseapp.com",
           databaseURL: "https://puzzlesapp-default-rtdb.firebaseio.com",
@@ -115,6 +120,35 @@
           measurementId: "G-8YEJEBX0NE"
         };
 
+        // --- Core UI Utilities ---
+        window.showToast = (message, type = 'success') => {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            const color = type === 'success' ? 'bg-green-600' : type === 'warning' ? 'bg-yellow-600' : 'bg-red-600';
+            toast.className = `${color} text-white px-5 py-3 rounded-xl shadow-2xl flex items-center gap-3 transform transition-all duration-300 translate-y-10 opacity-0 pointer-events-auto border border-white/10`;
+            toast.innerHTML = `<span class="font-medium text-sm">${message}</span>`;
+            container.appendChild(toast);
+            setTimeout(() => toast.classList.remove('translate-y-10', 'opacity-0'), 10);
+            setTimeout(() => {
+                toast.classList.add('translate-y-10', 'opacity-0');
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        };
+
+        window.openModal = (htmlContent) => {
+            const modal = document.getElementById('modal-container');
+            modal.innerHTML = htmlContent;
+            modal.classList.remove('hidden');
+            setTimeout(() => modal.classList.remove('opacity-0'), 10);
+        };
+
+        window.closeModal = () => {
+            const modal = document.getElementById('modal-container');
+            modal.classList.add('opacity-0');
+            setTimeout(() => { modal.classList.add('hidden'); modal.innerHTML = ''; }, 300);
+        };
+
+        // --- Initialization ---
         window.unlockAdmin = async (e) => {
             e.preventDefault();
             if (document.getElementById('admin-key').value === 'password123') {
@@ -122,16 +156,14 @@
                 document.getElementById('workspace').classList.remove('hidden');
                 document.getElementById('workspace').classList.add('flex');
                 
-                // Show loading indicator
                 document.getElementById('main-content').innerHTML = `
                     <div class="flex justify-center items-center h-64 flex-col fade-in">
                         <i class="fa-solid fa-circle-notch fa-spin text-4xl text-blue-500 mb-4"></i>
                         <p class="text-gray-400 font-medium">Connecting to Database Cluster...</p>
                     </div>`;
 
-                try {
-                    await init();
-                } catch(err) {
+                try { await init(); } 
+                catch(err) {
                     console.error("Initialization error", err);
                     document.getElementById('main-content').innerHTML = `
                         <div class="flex justify-center items-center h-64 flex-col text-center fade-in">
@@ -142,7 +174,7 @@
                         </div>`;
                 }
             } else { 
-                alert("Key Denied. Please enter the correct administration password."); 
+                showToast("Key Denied. Incorrect administration password.", "error"); 
             }
         };
 
@@ -152,113 +184,235 @@
             db = getFirestore(app);
 
             await signInAnonymously(auth);
-            // Immediately render dashboard once signed in
+            
+            // Setup listener for all documents
+            const q = collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items');
+            onSnapshot(q, snap => {
+                adminItems = snap.docs.map(d => ({id: d.id, ...d.data()}));
+                if(currentTab === 'dashboard') renderDashboard();
+            }, err => {
+                console.error(err);
+                showToast("Failed to sync realtime data.", "error");
+            });
+
             setTab('dashboard');
         }
 
         window.setTab = (tab) => {
             currentTab = tab;
-            render();
+            const dashBtn = document.getElementById('tab-dash');
+            if(tab === 'dashboard') dashBtn.classList.replace('text-gray-400', 'text-blue-400');
+            else dashBtn.classList.replace('text-blue-400', 'text-gray-400');
+            
+            if (tab === 'dashboard') renderDashboard();
+            else renderUpload();
         }
 
-        async function render() {
-            const container = document.getElementById('main-content');
-            if (currentTab === 'dashboard') {
-                container.innerHTML = `<div class="grid gap-6" id="items-grid"></div>`;
-                const q = collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items');
-                
-                onSnapshot(q, snap => {
-                    const items = snap.docs.map(d => ({id: d.id, ...d.data()}));
-                    document.getElementById('items-grid').innerHTML = `
-                        <div class="flex justify-between items-end mb-8">
-                            <div>
-                                <h2 class="text-3xl font-extrabold">Active Nodes</h2>
-                                <p class="text-gray-500">Live storage data visible to users</p>
-                            </div>
-                            <div class="flex items-center gap-2 bg-gray-900 px-4 py-2 rounded-full border border-gray-800">
-                                <span class="status-dot status-online"></span>
-                                <span class="text-xs font-bold uppercase tracking-wider text-gray-400">Database Connected</span>
-                            </div>
-                        </div>
-                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                            ${items.length === 0 ? `
-                                <div class="col-span-full py-20 text-center border-2 border-dashed border-gray-800 rounded-[2rem]">
-                                    <i class="fa-solid fa-inbox text-4xl text-gray-700 mb-4"></i>
-                                    <p class="text-gray-500 font-medium">No assets deployed yet. Start by creating a new deployment.</p>
-                                </div>
-                            ` : items.map(i => `
-                                <div class="glass-card p-6 rounded-3xl hover:border-blue-500/50 transition-all group fade-in relative overflow-hidden">
-                                    <div class="flex justify-between items-start mb-6">
-                                        <div class="w-12 h-12 bg-blue-600/10 rounded-2xl flex items-center justify-center text-blue-400 group-hover:scale-110 transition">
-                                            <i class="fa-solid ${i.category === 'software' ? 'fa-box-archive' : i.category === 'media' ? 'fa-clapperboard' : 'fa-file-lines'} text-xl"></i>
-                                        </div>
-                                        <button onclick="removeItem('${i.id}')" class="w-8 h-8 rounded-full bg-red-500/10 text-red-500 flex items-center justify-center hover:bg-red-500 hover:text-white transition">
-                                            <i class="fa-solid fa-trash-can text-sm"></i>
-                                        </button>
-                                    </div>
-                                    <h3 class="font-bold text-xl mb-2 line-clamp-1">${i.title}</h3>
-                                    <p class="text-gray-500 text-sm mb-6 line-clamp-2 h-10">${i.description}</p>
-                                    <div class="flex items-center justify-between pt-4 border-t border-gray-800">
-                                        <span class="text-[10px] font-bold uppercase tracking-widest text-blue-500">${i.files?.length || 1} Asset Stream</span>
-                                        <span class="text-[10px] text-gray-600 font-mono">ID: ${i.id.substring(0,6)}</span>
-                                    </div>
-                                </div>
-                            `).join('')}
-                        </div>
-                    `;
-                }, err => {
-                    console.error(err);
-                });
-            } else {
-                container.innerHTML = `
-                    <div class="max-w-2xl mx-auto py-4 fade-in">
-                        <form onsubmit="handleInfiniteUpload(event)" class="glass-card p-10 rounded-[2.5rem] space-y-6 shadow-2xl border-blue-500/10">
-                            <div class="flex items-center gap-4 mb-2">
-                                <div class="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center">
-                                    <i class="fa-solid fa-cloud-arrow-up text-white text-xl"></i>
-                                </div>
-                                <div>
-                                    <h2 class="text-2xl font-bold">New Asset Stream</h2>
-                                    <p class="text-gray-500 text-xs">Files are hosted on the infinite public cluster</p>
-                                </div>
-                            </div>
-                            
-                            <div class="space-y-4">
-                                <div class="group">
-                                    <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Asset Name</label>
-                                    <input id="up-title" required class="w-full bg-gray-950 border border-gray-800 rounded-2xl p-5 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition" placeholder="e.g. Photoshop Portable 2024">
-                                </div>
+        // --- Admin Controls & Data Management ---
+        window.updateStatus = async (id, status) => {
+            try {
+                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id), { status });
+                showToast(`Stream marked as ${status}.`, status === 'approved' ? 'success' : 'warning');
+            } catch (e) { showToast("Error updating status.", "error"); }
+        };
 
-                                <div class="group">
-                                    <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Description</label>
-                                    <textarea id="up-desc" required class="w-full bg-gray-950 border border-gray-800 rounded-2xl p-5 h-32 focus:border-blue-500 outline-none transition" placeholder="Explain what this file is for..."></textarea>
-                                </div>
-
-                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div class="group">
-                                        <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Category</label>
-                                        <select id="up-cat" class="w-full bg-gray-950 border border-gray-800 rounded-2xl p-5 outline-none focus:border-blue-500">
-                                            <option value="software">Software / Apps</option>
-                                            <option value="media">Movies / Videos</option>
-                                            <option value="docs">Guides / PDFs</option>
-                                        </select>
-                                    </div>
-                                    <div class="group">
-                                        <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Physical File</label>
-                                        <div class="relative group">
-                                            <input type="file" id="up-file" required class="relative w-full bg-gray-950 border border-gray-800 rounded-2xl p-[18px] text-xs text-gray-500 file:bg-blue-600 file:border-0 file:rounded-xl file:px-4 file:py-2 file:text-white file:font-bold file:mr-4 hover:border-gray-700 transition">
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                            <button type="submit" class="w-full btn-gradient py-5 rounded-2xl font-bold text-lg shadow-xl mt-4">Deploy to Nexus Hub</button>
-                        </form>
-                    </div>
-                `;
+        window.removeItem = async (id) => {
+            if(confirm("Permanently purge this asset from the Hub? It will be deleted for everyone.")) {
+                try {
+                    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id));
+                    showToast("Asset purged successfully.");
+                } catch(e) { showToast("Failed to delete.", "error"); }
             }
+        };
+
+        window.editItem = (id) => {
+            const item = adminItems.find(i => i.id === id);
+            if (!item) return;
+            openModal(`
+                <div class="glass-card p-8 rounded-[2.5rem] w-full max-w-lg border border-blue-500/20 shadow-2xl relative fade-in">
+                    <button onclick="closeModal()" class="absolute top-6 right-6 text-gray-500 hover:text-white transition"><i class="fa-solid fa-times text-xl"></i></button>
+                    <div class="flex items-center gap-4 mb-6">
+                        <div class="w-12 h-12 bg-blue-600/10 rounded-2xl flex items-center justify-center text-blue-500 border border-blue-500/20">
+                            <i class="fa-solid fa-pen-to-square text-xl"></i>
+                        </div>
+                        <h3 class="text-2xl font-bold text-white">Edit Stream</h3>
+                    </div>
+                    <div class="space-y-4">
+                        <div class="group">
+                            <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Title</label>
+                            <input type="text" id="edit-title" value="${item.title.replace(/"/g, '&quot;')}" class="w-full bg-gray-950 border border-gray-800 rounded-2xl p-4 text-white focus:border-blue-500 outline-none transition">
+                        </div>
+                        <div class="group">
+                            <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Description</label>
+                            <textarea id="edit-desc" rows="4" class="w-full bg-gray-950 border border-gray-800 rounded-2xl p-4 text-white focus:border-blue-500 outline-none transition">${item.description}</textarea>
+                        </div>
+                        <div class="group">
+                            <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Category</label>
+                            <select id="edit-cat" class="w-full bg-gray-950 border border-gray-800 rounded-2xl p-4 text-white focus:border-blue-500 outline-none transition">
+                                <option value="software" ${item.category==='software'?'selected':''}>Software / Apps</option>
+                                <option value="media" ${item.category==='media'?'selected':''}>Movies / Videos</option>
+                                <option value="docs" ${item.category==='docs'?'selected':''}>Guides / PDFs</option>
+                                <option value="collection" ${item.category==='collection'?'selected':''}>Collections (Mixed)</option>
+                                <option value="document" ${item.category==='document'?'selected':''}>Texts & Documents</option>
+                                <option value="audio" ${item.category==='audio'?'selected':''}>Audio / Music</option>
+                                <option value="image" ${item.category==='image'?'selected':''}>Images / Photos</option>
+                                <option value="archive" ${item.category==='archive'?'selected':''}>Archives</option>
+                                <option value="other" ${item.category==='other'?'selected':''}>Misc / Other</option>
+                            </select>
+                        </div>
+                        <div class="flex gap-3 pt-4">
+                            <button onclick="closeModal()" class="flex-1 bg-gray-900 hover:bg-gray-800 border border-gray-800 text-white font-bold py-4 rounded-2xl transition">Cancel</button>
+                            <button onclick="saveEdit('${id}')" class="flex-1 btn-gradient text-white font-bold py-4 rounded-2xl transition shadow-lg">Save Changes</button>
+                        </div>
+                    </div>
+                </div>
+            `);
+        };
+
+        window.saveEdit = async (id) => {
+            const title = document.getElementById('edit-title').value;
+            const description = document.getElementById('edit-desc').value;
+            const category = document.getElementById('edit-cat').value;
+            try {
+                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id), { title, description, category });
+                showToast("Stream updated successfully.");
+                closeModal();
+            } catch (e) { showToast("Failed to update.", "error"); }
+        };
+
+        // --- Render Functions ---
+        function renderDashboard() {
+            const container = document.getElementById('main-content');
+            
+            const rows = adminItems.sort((a,b) => (b.createdAt?.toMillis() || 0) - (a.createdAt?.toMillis() || 0)).map(i => {
+                const isPending = i.status === 'pending';
+                const isApproved = i.status === 'approved';
+                const statusBadge = isPending 
+                    ? `<span class="px-3 py-1 text-xs rounded-full font-bold uppercase bg-yellow-500/10 text-yellow-500 border border-yellow-500/20"><i class="fa-solid fa-clock mr-1"></i> Pending</span>`
+                    : isApproved
+                    ? `<span class="px-3 py-1 text-xs rounded-full font-bold uppercase bg-green-500/10 text-green-500 border border-green-500/20"><i class="fa-solid fa-check mr-1"></i> Approved</span>`
+                    : `<span class="px-3 py-1 text-xs rounded-full font-bold uppercase bg-red-500/10 text-red-500 border border-red-500/20"><i class="fa-solid fa-ban mr-1"></i> Rejected</span>`;
+
+                return `
+                <tr class="hover:bg-gray-800/30 transition border-b border-gray-800/50 group">
+                    <td class="p-5">
+                        <div class="flex items-center gap-4">
+                            <div class="w-10 h-10 bg-blue-600/10 rounded-xl flex items-center justify-center text-blue-500 border border-blue-500/20">
+                                <i class="fa-solid ${i.category === 'software' ? 'fa-box-archive' : i.category === 'media' || i.category === 'video' ? 'fa-clapperboard' : 'fa-file-lines'}"></i>
+                            </div>
+                            <div>
+                                <h3 class="font-bold text-white text-sm truncate max-w-[250px]" title="${i.title.replace(/"/g, '&quot;')}">${i.title}</h3>
+                                <p class="text-[10px] text-gray-500 uppercase tracking-wider">${i.category}</p>
+                            </div>
+                        </div>
+                    </td>
+                    <td class="p-5 text-sm text-gray-400">
+                        <div class="flex items-center gap-2">
+                            <i class="fa-solid fa-user-astronaut text-gray-600"></i> ${i.submitterEmail || 'Admin'}
+                        </div>
+                    </td>
+                    <td class="p-5">${statusBadge}</td>
+                    <td class="p-5 flex justify-end gap-2">
+                        <button onclick="editItem('${i.id}')" class="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-400 flex items-center justify-center hover:bg-blue-600 hover:text-white transition" title="Edit Metadata"><i class="fa-solid fa-pen text-xs"></i></button>
+                        ${!isApproved ? `<button onclick="updateStatus('${i.id}', 'approved')" class="w-8 h-8 rounded-lg bg-green-500/10 text-green-500 flex items-center justify-center hover:bg-green-600 hover:text-white transition" title="Approve"><i class="fa-solid fa-check text-xs"></i></button>` : ''}
+                        ${i.status !== 'rejected' ? `<button onclick="updateStatus('${i.id}', 'rejected')" class="w-8 h-8 rounded-lg bg-orange-500/10 text-orange-400 flex items-center justify-center hover:bg-orange-600 hover:text-white transition" title="Reject"><i class="fa-solid fa-xmark text-xs"></i></button>` : ''}
+                        <button onclick="removeItem('${i.id}')" class="w-8 h-8 rounded-lg bg-red-500/10 text-red-500 flex items-center justify-center hover:bg-red-600 hover:text-white transition" title="Delete Permenantly"><i class="fa-solid fa-trash text-xs"></i></button>
+                    </td>
+                </tr>`;
+            }).join('');
+
+            container.innerHTML = `
+                <div class="fade-in">
+                    <div class="flex justify-between items-end mb-8">
+                        <div>
+                            <h2 class="text-3xl font-extrabold text-white">Active Nodes & Submissions</h2>
+                            <p class="text-gray-500 mt-1">Manage streams globally across the cluster.</p>
+                        </div>
+                        <div class="flex items-center gap-2 bg-gray-900 px-4 py-2 rounded-full border border-gray-800 shadow-inner">
+                            <span class="status-dot status-online"></span>
+                            <span class="text-xs font-bold uppercase tracking-wider text-gray-400">Database Connected</span>
+                        </div>
+                    </div>
+
+                    ${adminItems.length === 0 ? `
+                        <div class="py-20 text-center border-2 border-dashed border-gray-800 rounded-[2rem] glass-card">
+                            <i class="fa-solid fa-inbox text-5xl text-gray-700 mb-4"></i>
+                            <p class="text-gray-500 font-medium">No assets deployed yet. Start by creating a new deployment.</p>
+                        </div>
+                    ` : `
+                        <div class="glass-card rounded-[2rem] overflow-hidden border border-gray-800 shadow-2xl">
+                            <div class="overflow-x-auto">
+                                <table class="w-full text-left border-collapse min-w-[700px]">
+                                    <thead>
+                                        <tr class="bg-gray-900/80 border-b border-gray-800 text-gray-500 text-xs uppercase tracking-widest">
+                                            <th class="p-5 font-bold">Asset Overview</th>
+                                            <th class="p-5 font-bold">Submitter</th>
+                                            <th class="p-5 font-bold">Status</th>
+                                            <th class="p-5 font-bold text-right">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y divide-gray-800/50">
+                                        ${rows}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    `}
+                </div>
+            `;
         }
 
-        // Custom uploader bypassing Firebase Storage limits
+        function renderUpload() {
+            document.getElementById('main-content').innerHTML = `
+                <div class="max-w-2xl mx-auto py-4 fade-in">
+                    <form onsubmit="handleInfiniteUpload(event)" class="glass-card p-10 rounded-[2.5rem] space-y-6 shadow-2xl border border-blue-500/20">
+                        <div class="flex items-center gap-4 mb-2">
+                            <div class="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-500/30">
+                                <i class="fa-solid fa-cloud-arrow-up text-white text-xl"></i>
+                            </div>
+                            <div>
+                                <h2 class="text-2xl font-bold text-white">Direct Admin Deployment</h2>
+                                <p class="text-gray-500 text-xs">Files bypass Firestore limits using Infinite API endpoints</p>
+                            </div>
+                        </div>
+                        
+                        <div class="space-y-4">
+                            <div class="group">
+                                <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Asset Name</label>
+                                <input id="up-title" required class="w-full bg-gray-950 border border-gray-800 rounded-2xl p-5 text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition" placeholder="e.g. Photoshop Portable 2024">
+                            </div>
+
+                            <div class="group">
+                                <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Description</label>
+                                <textarea id="up-desc" required class="w-full bg-gray-950 border border-gray-800 rounded-2xl p-5 h-32 text-white focus:border-blue-500 outline-none transition" placeholder="Explain what this file is for..."></textarea>
+                            </div>
+
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div class="group">
+                                    <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Category</label>
+                                    <select id="up-cat" class="w-full bg-gray-950 border border-gray-800 rounded-2xl p-5 text-white outline-none focus:border-blue-500">
+                                        <option value="software">Software / Apps</option>
+                                        <option value="media">Movies / Videos</option>
+                                        <option value="docs">Guides / PDFs</option>
+                                        <option value="collection">Mixed / Collection</option>
+                                        <option value="archive">Archives</option>
+                                    </select>
+                                </div>
+                                <div class="group">
+                                    <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Physical File</label>
+                                    <div class="relative group">
+                                        <input type="file" id="up-file" required class="relative w-full bg-gray-950 border border-gray-800 rounded-2xl p-[18px] text-xs text-gray-500 file:bg-blue-600 file:border-0 file:rounded-xl file:px-4 file:py-2 file:text-white file:font-bold file:mr-4 hover:border-gray-700 transition cursor-pointer">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <button type="submit" class="w-full btn-gradient py-5 rounded-2xl font-bold text-white text-lg shadow-xl mt-4"><i class="fa-solid fa-satellite-dish mr-2"></i> Deploy to Nexus Hub</button>
+                    </form>
+                </div>
+            `;
+        }
+
+        // --- Custom uploader bypassing Firebase Storage limits (Kept exactly as requested) ---
         async function uploadToFreeHost(file, updateStatusFn) {
             try {
                 updateStatusFn(5, "Connecting to Infinite Hub (Gofile)...");
@@ -360,7 +514,8 @@
                     title, 
                     description: desc, 
                     category: cat, 
-                    status: 'approved',
+                    status: 'approved', // Auto-approved since it's an admin upload
+                    submitterEmail: 'Admin',
                     createdAt: serverTimestamp(),
                     files: [{
                         name: file.name,
@@ -372,6 +527,7 @@
                 });
 
                 updateStatus(100, "Deployment Successful!");
+                showToast("Stream successfully synced to the Hub!");
                 
                 setTimeout(() => {
                     overlay.classList.add('hidden');
@@ -380,14 +536,8 @@
 
             } catch (err) {
                 console.error(err);
-                alert("Upload Failed: " + err.message);
+                showToast("Upload Failed: " + err.message, "error");
                 overlay.classList.add('hidden');
-            }
-        };
-
-        window.removeItem = async (id) => {
-            if(confirm("Are you sure you want to remove this asset from the Hub? Users will no longer be able to see or download it.")) {
-                await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id));
             }
         };
 
