@@ -46,7 +46,7 @@
                     </div>
                     <div class="flex flex-col">
                         <span class="font-extrabold text-xl tracking-tighter leading-none">NEXUS<span class="text-blue-500">PRO</span></span>
-                        <span class="text-[9px] uppercase tracking-[0.2em] text-blue-500/70 font-black mt-1">Infinite Cloud Admin</span>
+                        <span class="text-[9px] uppercase tracking-[0.2em] text-blue-500/70 font-black mt-1">Free Tier Optimized</span>
                     </div>
                 </div>
                 <div class="flex items-center gap-6">
@@ -70,15 +70,15 @@
                 </div>
             </div>
             <h2 id="modal-title" class="text-2xl font-bold mb-2">Cloud Transmission</h2>
-            <p id="modal-status" class="text-slate-400 text-sm font-mono mb-10">Optimizing file for infinite hosting...</p>
+            <p id="modal-status" class="text-slate-400 text-sm font-mono mb-10">Streaming to Catbox Cluster...</p>
 
             <div id="progress-container">
                 <div class="relative h-3 bg-slate-900 rounded-full overflow-hidden border border-slate-800 mb-4">
                     <div id="modal-bar" class="absolute top-0 left-0 h-full shimmer w-0 transition-all duration-500"></div>
                 </div>
                 <div class="flex justify-between text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">
-                    <span id="modal-bytes">Initializing</span>
-                    <span id="modal-perc">0%</span>
+                    <span id="modal-bytes">Uploading</span>
+                    <span id="modal-perc">Processing</span>
                 </div>
             </div>
 
@@ -88,10 +88,9 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, deleteDoc, doc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // Firebase Configuration
         const firebaseConfig = {
             apiKey: "AIzaSyB-3kAk-lMT3jTny2YIs2R1_0mG-tJlmJI",
             authDomain: "puzzlesapp.firebaseapp.com",
@@ -112,28 +111,15 @@
                 document.getElementById('login-screen').classList.add('hidden');
                 document.getElementById('app').classList.replace('hidden', 'flex');
                 startSession();
-            } else { 
-                alert("Access Denied"); 
-            }
+            } else { alert("Access Denied"); }
         };
 
         async function startSession() {
             const app = initializeApp(firebaseConfig);
             auth = getAuth(app);
             db = getFirestore(app);
-            
-            // Authentication Protocol
-            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                await signInWithCustomToken(auth, __initial_auth_token);
-            } else {
-                await signInAnonymously(auth);
-            }
-
-            onAuthStateChanged(auth, user => { 
-                if(user) {
-                    switchView('items'); 
-                }
-            });
+            await signInAnonymously(auth);
+            onAuthStateChanged(auth, u => { if(u) switchView('items'); });
         }
 
         window.switchView = (v) => {
@@ -175,8 +161,7 @@
                         </div>
                     `;
                 }, (err) => {
-                    console.error("Firestore Error:", err);
-                    document.getElementById('item-feed').innerHTML = `<p class="text-red-500">Database connection error. Verify Firebase configuration and permissions.</p>`;
+                    document.getElementById('item-feed').innerHTML = `<p class="text-red-500">Database permission error.</p>`;
                 });
             } else {
                 out.innerHTML = `
@@ -188,37 +173,27 @@
                             </div>
                             
                             <div class="space-y-4">
-                                <div>
-                                    <label class="block text-xs font-black text-slate-500 uppercase tracking-[0.2em] mb-2 ml-1">Asset Information</label>
-                                    <input id="f-title" required class="w-full bg-slate-950 border border-slate-800 rounded-2xl p-5 focus:border-blue-500 outline-none transition mb-3" placeholder="Application Name (e.g. Adobe Premiere Pro)">
-                                    <textarea id="f-desc" required class="w-full bg-slate-950 border border-slate-800 rounded-2xl p-5 h-32 focus:border-blue-500 outline-none transition" placeholder="Detailed description for the user..."></textarea>
-                                </div>
+                                <input id="f-title" required class="w-full bg-slate-950 border border-slate-800 rounded-2xl p-5 focus:border-blue-500 outline-none transition mb-1" placeholder="Application Name">
+                                <textarea id="f-desc" required class="w-full bg-slate-950 border border-slate-800 rounded-2xl p-5 h-32 focus:border-blue-500 outline-none transition" placeholder="Description"></textarea>
 
                                 <div class="grid grid-cols-2 gap-4">
-                                    <div>
-                                        <label class="block text-xs font-black text-slate-500 uppercase tracking-[0.2em] mb-2 ml-1">Category</label>
-                                        <select id="f-cat" class="w-full bg-slate-950 border border-slate-800 rounded-2xl p-5 outline-none focus:border-blue-500">
-                                            <option value="software">Software</option>
-                                            <option value="media">Multimedia</option>
-                                            <option value="docs">Document/Guide</option>
-                                        </select>
-                                    </div>
-                                    <div>
-                                        <label class="block text-xs font-black text-slate-500 uppercase tracking-[0.2em] mb-2 ml-1">File Delivery</label>
-                                        <select id="f-type" onchange="toggleInput(this.value)" class="w-full bg-slate-950 border border-slate-800 rounded-2xl p-5 outline-none focus:border-blue-500">
-                                            <option value="stream">Automatic Stream</option>
-                                            <option value="link">Manual External Link</option>
-                                        </select>
-                                    </div>
+                                    <select id="f-cat" class="w-full bg-slate-950 border border-slate-800 rounded-2xl p-5 outline-none focus:border-blue-500">
+                                        <option value="software">Software</option>
+                                        <option value="media">Multimedia</option>
+                                        <option value="docs">Document</option>
+                                    </select>
+                                    <select id="f-type" onchange="toggleInput(this.value)" class="w-full bg-slate-950 border border-slate-800 rounded-2xl p-5 outline-none focus:border-blue-500">
+                                        <option value="stream">Automatic Stream</option>
+                                        <option value="link">Manual External Link</option>
+                                    </select>
                                 </div>
 
                                 <div id="input-container">
-                                    <label class="block text-xs font-black text-slate-500 uppercase tracking-[0.2em] mb-2 ml-1">Asset Data</label>
-                                    <input type="file" id="f-file" class="w-full bg-slate-950 border border-slate-800 rounded-2xl p-[18px] text-[10px] text-slate-500 file:bg-blue-600 file:border-0 file:rounded-xl file:px-3 file:py-1.5 file:text-white file:font-black file:mr-4 file:uppercase cursor-pointer">
+                                    <input type="file" id="f-file" required class="w-full bg-slate-950 border border-slate-800 rounded-2xl p-4 text-xs">
                                 </div>
                             </div>
                             
-                            <button type="submit" class="w-full btn-primary py-5 rounded-2xl font-black text-lg shadow-xl uppercase tracking-widest mt-4">Broadcast to Hub</button>
+                            <button type="submit" class="w-full btn-primary py-5 rounded-2xl font-black text-lg uppercase tracking-widest mt-4">Broadcast Asset</button>
                         </form>
                     </div>
                 `;
@@ -228,15 +203,9 @@
         window.toggleInput = (val) => {
             const container = document.getElementById('input-container');
             if (val === 'stream') {
-                container.innerHTML = `
-                    <label class="block text-xs font-black text-slate-500 uppercase tracking-[0.2em] mb-2 ml-1">Automatic Upload</label>
-                    <input type="file" id="f-file" required class="w-full bg-slate-950 border border-slate-800 rounded-2xl p-[18px] text-[10px] text-slate-500 file:bg-blue-600 file:border-0 file:rounded-xl file:px-3 file:py-1.5 file:text-white file:font-black file:mr-4 file:uppercase cursor-pointer">
-                `;
+                container.innerHTML = `<input type="file" id="f-file" required class="w-full bg-slate-950 border border-slate-800 rounded-2xl p-4 text-xs">`;
             } else {
-                container.innerHTML = `
-                    <label class="block text-xs font-black text-slate-500 uppercase tracking-[0.2em] mb-2 ml-1">External Resource URL</label>
-                    <input type="url" id="f-url" required class="w-full bg-slate-950 border border-slate-800 rounded-2xl p-5 focus:border-blue-500 outline-none transition" placeholder="Paste link from Mega, G-Drive, Mediafire...">
-                `;
+                container.innerHTML = `<input type="url" id="f-url" required class="w-full bg-slate-950 border border-slate-800 rounded-2xl p-5 focus:border-blue-500 outline-none transition" placeholder="Paste link (Mega, G-Drive, etc)">`;
             }
         }
 
@@ -251,11 +220,9 @@
             const bar = document.getElementById('modal-bar');
             const perc = document.getElementById('modal-perc');
             const stat = document.getElementById('modal-status');
-            const bytesText = document.getElementById('modal-bytes');
 
             modal.classList.remove('hidden');
-            stat.innerText = "Connecting to transmission node...";
-            bar.style.width = '10%'; perc.innerText = '10%';
+            bar.style.width = '30%';
 
             let finalUrl = "";
             let fileName = "resource.link";
@@ -263,34 +230,28 @@
             try {
                 if (type === 'stream') {
                     const file = document.getElementById('f-file').files[0];
-                    if (!file) throw new Error("No file selected.");
+                    if (!file) throw new Error("No file.");
                     fileName = file.name;
-                    bytesText.innerText = (file.size / (1024 * 1024)).toFixed(2) + " MB Stream";
-                    
-                    stat.innerText = "Syncing data bytes...";
-                    bar.style.width = '40%'; perc.innerText = '40%';
 
                     const formData = new FormData();
-                    formData.append('file', file);
+                    formData.append('reqtype', 'fileupload');
+                    formData.append('fileToUpload', file);
 
-                    const res = await fetch('https://file.io/?expires=1w', {
+                    // Using a CORS proxy + Catbox (The most reliable combo for free tier browser apps)
+                    const res = await fetch('https://corsproxy.io/?url=https://catbox.moe/user/api.php', {
                         method: 'POST',
                         body: formData
                     });
 
-                    if(!res.ok) throw new Error("Network error during stream. Try 'Manual Link' instead.");
-                    const data = await res.json();
-                    if(!data.success) throw new Error(data.message || "Upload rejected.");
+                    if(!res.ok) throw new Error("Stream failed. Network limitation.");
+                    finalUrl = await res.text();
                     
-                    finalUrl = data.link;
+                    if(!finalUrl.includes('https')) throw new Error("Upload response invalid.");
                 } else {
                     finalUrl = document.getElementById('f-url').value;
-                    if (!finalUrl) throw new Error("No URL provided.");
                 }
 
-                stat.innerText = "Updating Hub Registry...";
-                bar.style.width = '85%'; perc.innerText = '85%';
-
+                bar.style.width = '80%';
                 await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items'), {
                     title, description: desc, category: cat,
                     status: 'approved',
@@ -298,7 +259,7 @@
                     files: [{ name: fileName, url: finalUrl, type: cat }]
                 });
 
-                bar.style.width = '100%'; perc.innerText = '100%';
+                bar.style.width = '100%';
                 stat.innerText = "Deployment Successful!";
                 setTimeout(() => {
                     modal.classList.add('hidden');
@@ -307,18 +268,14 @@
 
             } catch (err) {
                 console.error(err);
-                alert("DEPLOYMENT ERROR: " + err.message);
+                alert("DEPLOYMENT ERROR: " + err.message + "\n\nTip: Use 'Manual Link' for large files.");
                 modal.classList.add('hidden');
             }
         };
 
         window.trash = async (id) => {
-            if(confirm("Confirm: Permanent removal of this asset from the cluster?")) {
-                try {
-                    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id));
-                } catch (e) {
-                    alert("Delete failed: Check database permissions.");
-                }
+            if(confirm("Confirm: Permanent removal?")) {
+                await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id));
             }
         };
     </script>
