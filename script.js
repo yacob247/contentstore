@@ -1,6 +1,7 @@
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, deleteDoc, doc, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { uploadFileToGofile } from "./gofile-storage.js";
         import {
             buildFileShareHash,
             buildItemShareHash,
@@ -215,7 +216,10 @@
             }
 
             if (!response.ok) {
-                throw new Error(payload?.error || 'Cannot access.');
+                const error = new Error(payload?.error || `Security backend request failed (${response.status}).`);
+                error.status = response.status;
+                error.payload = payload;
+                throw error;
             }
 
             return payload;
@@ -233,8 +237,21 @@
             try {
                 showWorkspaceLoading('Opening admin console...');
                 await ensureAdminBootstrapAuth();
-                await assertAdminAccess();
+                let backendSessionUnavailable = false;
+                try {
+                    await assertAdminAccess();
+                } catch (error) {
+                    if (!isBackendRouteUnavailable(error)) {
+                        throw error;
+                    }
+
+                    backendSessionUnavailable = true;
+                    console.warn('Security backend admin session route is unavailable; continuing in public upload mode.', error);
+                }
                 await init();
+                if (backendSessionUnavailable) {
+                    showToast('Backend admin routes are unavailable on this host. Public uploads can fall back to Gofile, but sensitive storage still requires the backend.', 'warning');
+                }
             } catch (error) {
                 console.error('Admin console bootstrap failed', error);
                 renderAdminBootstrapError('The console could not finish loading. If your backend still expects the old page password or a Firebase admin login, remove that backend requirement or re-enable the old login layer.');
@@ -301,6 +318,15 @@
 
         function buildSecurityBackendUrl(path) {
             return `${SECURITY_BACKEND_BASE_URL}${path}`;
+        }
+
+        function isBackendRouteUnavailable(error) {
+            const status = Number(error?.status || 0);
+            return status === 404 || status === 405;
+        }
+
+        function isBackendUploadRouteUnavailable(error) {
+            return Number(error?.status || 0) === 405;
         }
 
         function getCategoryInfo(category) {
@@ -636,7 +662,10 @@
                     }
 
                     const detailedReason = payload?.findings?.find(f => f.reason)?.reason || payload?.error || `Security backend rejected the upload (${xhr.status}).`;
-                    reject(new Error(detailedReason));
+                    const rejection = new Error(detailedReason);
+                    rejection.status = xhr.status;
+                    rejection.payload = payload;
+                    reject(rejection);
                 };
 
                 xhr.onerror = () => reject(new Error("Could not reach the security backend."));
@@ -644,6 +673,40 @@
                     .then(() => xhr.send(formData))
                     .catch(() => reject(new Error('Cannot access.')));
             });
+        }
+
+        async function uploadPublicAdminFileWithStorageFallback(file, metadata, updateStatusFn) {
+            try {
+                const scanPayload = await uploadToSecurityBackend(file, metadata, updateStatusFn);
+                updateStatusFn(88, "Releasing clean admin upload from quarantine...");
+                const releasePayload = await callSecurityBackend(`/api/uploads/${scanPayload.id}/release`, 'POST', { actor: 'admin-upload' });
+                return {
+                    storageProvider: 'backend',
+                    url: resolveSecurityBackendDownloadUrl(releasePayload),
+                    backendScan: buildBackendScanMetaFromReport(releasePayload.report)
+                };
+            } catch (error) {
+                if (!isBackendUploadRouteUnavailable(error)) {
+                    throw error;
+                }
+
+                const gofileUpload = await uploadFileToGofile(file, {
+                    onProgress: (e) => {
+                        if (!e.lengthComputable) return;
+                        const percent = 12 + ((e.loaded / e.total) * 76);
+                        const mbLoaded = Math.round((e.loaded / 1024 / 1024) * 10) / 10;
+                        const mbTotal = Math.round((e.total / 1024 / 1024) * 10) / 10;
+                        updateStatusFn(percent, `Backend upload route unavailable. Uploading to Gofile: ${mbLoaded}MB / ${mbTotal}MB`);
+                    }
+                });
+
+                return {
+                    storageProvider: 'gofile',
+                    url: gofileUpload.directUrl || gofileUpload.url,
+                    backendScan: null,
+                    gofile: gofileUpload
+                };
+            }
         }
 
         async function releaseItemSecurityAssets(item) {
@@ -1586,8 +1649,7 @@
                     return;
                 }
 
-                updateStatus(5, "Sending file to backend quarantine...");
-                const scanPayload = await uploadToSecurityBackend(file, {
+                const uploadMetadata = {
                     displayTitle: title,
                     category: cat,
                     visibility,
@@ -1596,13 +1658,42 @@
                     fileRole: 'admin_deployment',
                     fileLabel: file.name,
                     fileCategory: cat
-                }, updateStatus);
+                };
 
-                updateStatus(88, "Releasing clean admin upload from quarantine...");
-                const releasePayload = await callSecurityBackend(`/api/uploads/${scanPayload.id}/release`, 'POST', { actor: 'admin-upload' });
-                const releasedReport = releasePayload.report;
+                let uploadResult = null;
+                if (visibility === 'sensitive') {
+                    updateStatus(5, "Sending file to backend quarantine...");
+                    const scanPayload = await uploadToSecurityBackend(file, uploadMetadata, updateStatus);
+                    updateStatus(88, "Releasing clean admin upload from quarantine...");
+                    const releasePayload = await callSecurityBackend(`/api/uploads/${scanPayload.id}/release`, 'POST', { actor: 'admin-upload' });
+                    uploadResult = {
+                        storageProvider: 'backend',
+                        url: resolveSecurityBackendDownloadUrl(releasePayload),
+                        backendScan: buildBackendScanMetaFromReport(releasePayload.report)
+                    };
+                } else {
+                    updateStatus(5, "Sending file to protected storage...");
+                    uploadResult = await uploadPublicAdminFileWithStorageFallback(file, uploadMetadata, updateStatus);
+                }
 
                 updateStatus(95, "Syncing metadata with Database...");
+
+                const filePayload = {
+                    name: resolvedFileLabel,
+                    url: uploadResult.url,
+                    type: cat,
+                    shareSlug: fileShareSlug,
+                    size: (file.size / (1024 * 1024)).toFixed(2) + ' MB',
+                    uploadedAt: new Date().toISOString()
+                };
+
+                if (uploadResult.backendScan) {
+                    filePayload.backendScan = uploadResult.backendScan;
+                }
+
+                if (uploadResult.storageProvider === 'gofile' && uploadResult.gofile?.downloadPage) {
+                    filePayload.externalPageUrl = uploadResult.gofile.downloadPage;
+                }
 
                 // Add document to completely free tier of Firestore Text Database
                 const itemPayload = {
@@ -1614,15 +1705,7 @@
                     status: 'approved',
                     visibility,
                     submitterEmail: 'Admin',
-                    files: [{
-                        name: resolvedFileLabel,
-                        url: resolveSecurityBackendDownloadUrl(releasePayload),
-                        type: cat,
-                        shareSlug: fileShareSlug,
-                        size: (file.size / (1024 * 1024)).toFixed(2) + ' MB',
-                        uploadedAt: new Date().toISOString(),
-                        backendScan: buildBackendScanMetaFromReport(releasedReport)
-                    }]
+                    files: [filePayload]
                 };
 
                 if (visibility === 'sensitive') {
@@ -1635,10 +1718,12 @@
                     });
                 }
 
-                updateStatus(100, "Deployment Successful!");
+                updateStatus(100, uploadResult.storageProvider === 'gofile' ? "Deployment Successful via Gofile!" : "Deployment Successful!");
                 showToast(visibility === 'sensitive'
                     ? "Sensitive file stored in backend-only catalog and protected routes."
-                    : "Stream scanned, released, and synced to the Hub!");
+                    : uploadResult.storageProvider === 'gofile'
+                        ? "Backend upload route was unavailable, so the file was stored on Gofile and synced to the Hub."
+                        : "Stream scanned, released, and synced to the Hub!");
                 await refreshSecurityIncidents();
                 
                 setTimeout(() => {
