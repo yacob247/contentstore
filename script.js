@@ -138,12 +138,17 @@
         }
 
         async function requestAdminSession(path, method, body) {
-            const response = await fetch(buildSecurityBackendUrl(path), {
-                method,
-                credentials: 'include',
-                headers: body ? { 'Content-Type': 'application/json' } : undefined,
-                body: body ? JSON.stringify(body) : undefined
-            });
+            let response = null;
+            try {
+                response = await fetch(buildSecurityBackendUrl(path), {
+                    method,
+                    credentials: 'include',
+                    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+                    body: body ? JSON.stringify(body) : undefined
+                });
+            } catch (error) {
+                throw new Error('Cannot access.');
+            }
 
             let payload = null;
             try {
@@ -435,12 +440,17 @@
                 headers['x-security-admin-token'] = SECURITY_ADMIN_TOKEN;
             }
 
-            const response = await fetch(buildSecurityBackendUrl(path), {
-                method,
-                credentials: 'include',
-                headers,
-                body: body ? JSON.stringify(body) : undefined
-            });
+            let response = null;
+            try {
+                response = await fetch(buildSecurityBackendUrl(path), {
+                    method,
+                    credentials: 'include',
+                    headers,
+                    body: body ? JSON.stringify(body) : undefined
+                });
+            } catch (error) {
+                throw new Error('Cannot access.');
+            }
 
             let payload = null;
             try {
