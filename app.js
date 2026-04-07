@@ -1,7 +1,8 @@
    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, deleteDoc, doc, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        import { auditSubmissionDraft } from "./sandbox-auditor.js";
+        import { auditSubmissionDraft } from "./security/sandbox-auditor.js";
+        import { uploadFileToGofile } from "./gofile-storage.js";
         import {
             buildFileShareHash,
             buildItemShareHash,
@@ -951,6 +952,10 @@
             return `${SECURITY_BACKEND_BASE_URL}${path}`;
         }
 
+        function isBackendUploadRouteUnavailable(error) {
+            return Number(error?.status || 0) === 405;
+        }
+
         async function fetchSensitiveSharedItem(itemSlug) {
             try {
                 const response = await fetch(buildSecurityBackendUrl(`/api/private/share/${encodeURIComponent(itemSlug)}`), {
@@ -1191,12 +1196,36 @@
 
                     const detailedReason = payload?.findings?.find(f => f.reason)?.reason || payload?.error || `Security backend rejected the upload (${xhr.status}).`;
                     const rejection = new Error(detailedReason);
+                    rejection.status = xhr.status;
                     rejection.payload = payload;
                     reject(rejection);
                 };
                 xhr.onerror = () => reject(new Error("Could not reach the security backend. Start the backend service and try again."));
                 xhr.send(formData);
             });
+        }
+
+        async function uploadFileWithStorageFallback(file, metadata, onProgress) {
+            try {
+                const scanResult = await uploadToSecurityBackend(file, metadata, onProgress);
+                return {
+                    url: resolveSecurityBackendDownloadUrl(scanResult),
+                    backendScan: buildBackendScanMeta(scanResult),
+                    storageProvider: 'backend'
+                };
+            } catch (error) {
+                if (!isBackendUploadRouteUnavailable(error)) {
+                    throw error;
+                }
+
+                const gofileUpload = await uploadFileToGofile(file, { onProgress });
+                return {
+                    url: gofileUpload.directUrl || gofileUpload.url,
+                    backendScan: null,
+                    storageProvider: 'gofile',
+                    gofile: gofileUpload
+                };
+            }
         }
 
         window.handleSubmission = async (e) => {
@@ -1246,6 +1275,7 @@
                 clearAuditErrors();
 
                 let finalFiles = [], uploadCount = state.draftFiles.filter(f => f.inputType === 'upload').length, processedCount = 0;
+                let usedGofileFallback = false;
                 const requiresReapproval = auditResult.requiresReapproval;
                 const backendSubmissionMeta = {
                     displayTitle: title,
@@ -1263,7 +1293,7 @@
                 } else if (state.draftImage.inputType === 'upload' && state.draftImage.file) {
                     statText.innerText = `Uploading cover image for backend scan...`;
                     uploadCount++; // Count cover image as an upload for progress bar
-                    const imageScanResult = await uploadToSecurityBackend(state.draftImage.file, {
+                    const imageUpload = await uploadFileWithStorageFallback(state.draftImage.file, {
                         ...backendSubmissionMeta,
                         fileRole: 'cover_image'
                     }, (e) => {
@@ -1273,8 +1303,9 @@
                             pText.innerText = Math.round(prog) + '%';
                         }
                     });
-                    finalImgUrl = getSecurityBackendFileUrl(imageScanResult.id);
-                    finalImageScan = buildBackendScanMeta(imageScanResult);
+                    finalImgUrl = imageUpload.url;
+                    finalImageScan = imageUpload.backendScan;
+                    usedGofileFallback = usedGofileFallback || imageUpload.storageProvider === 'gofile';
                     processedCount++;
                 } else {
                     finalImgUrl = state.draftImage.url; // fallback to existing
@@ -1305,14 +1336,20 @@
                                 statText.innerText = `Sending to security backend: ${mb} MB...`;
                             }
                         };
-                        const scanResult = await uploadToSecurityBackend(draft.file, {
+                        const uploadResult = await uploadFileWithStorageFallback(draft.file, {
                             ...backendSubmissionMeta,
                             fileRole: 'attachment',
                             fileLabel: draft.name,
                             fileCategory: draft.type
                         }, onProgress);
-                        fileData.url = resolveSecurityBackendDownloadUrl(scanResult);
-                        fileData.backendScan = buildBackendScanMeta(scanResult);
+                        fileData.url = uploadResult.url;
+                        if (uploadResult.backendScan) {
+                            fileData.backendScan = uploadResult.backendScan;
+                        }
+                        if (uploadResult.storageProvider === 'gofile' && uploadResult.gofile?.downloadPage) {
+                            fileData.externalPageUrl = uploadResult.gofile.downloadPage;
+                        }
+                        usedGofileFallback = usedGofileFallback || uploadResult.storageProvider === 'gofile';
                         processedCount++;
                     }
                     finalFiles.push(fileData);
@@ -1349,13 +1386,21 @@
                     
                     if (requiresReapproval && state.originalItem.status === 'approved') {
                         showToast("Updates saved! Changed files were sent back to quarantine review and need admin release.");
+                    } else if (usedGofileFallback) {
+                        showToast("Updates saved. Backend upload route was unavailable, so changed files were stored on Gofile.");
                     } else {
                         showToast("Text/Metadata updated successfully!");
                     }
                 } else {
                     docData.createdAt = serverTimestamp();
                     await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items'), docData);
-                    showToast(finalStatus === 'approved' ? "Uploaded successfully!" : "Submitted to quarantine review. An admin must release it before public download.");
+                    if (usedGofileFallback) {
+                        showToast(finalStatus === 'approved'
+                            ? "Uploaded successfully! Backend upload route was unavailable, so files were stored on Gofile."
+                            : "Submitted to review. Backend upload route was unavailable, so files were stored on Gofile.");
+                    } else {
+                        showToast(finalStatus === 'approved' ? "Uploaded successfully!" : "Submitted to quarantine review. An admin must release it before public download.");
+                    }
                 }
                 
                 // Route back gracefully
