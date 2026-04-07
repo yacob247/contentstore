@@ -1,7 +1,19 @@
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+   import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, deleteDoc, doc, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import { auditSubmissionDraft } from "./sandbox-auditor.js";
+        import {
+            buildFileShareHash,
+            buildItemShareHash,
+            buildShareUrl,
+            createShareSlug,
+            getEmbeddableVideoMeta,
+            getFileShareSlug,
+            getItemShareSlug,
+            getPrimaryEmbeddableVideo,
+            normalizeCategory,
+            sanitizeShareSlug
+        } from "./content-link-utils.js";
 
 
 
@@ -21,7 +33,8 @@
             draftMeta: { title: '', description: '', category: 'collection' },
             draftImage: { inputType: 'url', url: '', file: null },
             draftFiles: [],
-            auditErrors: []
+            auditErrors: [],
+            lastHandledShareRoute: ''
         };
 
         const CATEGORIES = {
@@ -40,6 +53,116 @@
         let app, auth, db, appId;
         let unsubPublic = null;
         let unsubPrivate = null;
+
+        function getCategoryInfo(category) {
+            return CATEGORIES[normalizeCategory(category)] || CATEGORIES['other'];
+        }
+
+        function getPublicAppBaseUrl() {
+            return `${window.location.origin}${window.location.pathname}${window.location.search}`;
+        }
+
+        function buildItemShareUrl(item) {
+            return buildShareUrl(getPublicAppBaseUrl(), buildItemShareHash(getItemShareSlug(item)));
+        }
+
+        function buildFileShareUrl(item, file, index) {
+            return buildShareUrl(
+                getPublicAppBaseUrl(),
+                buildFileShareHash(getItemShareSlug(item), getFileShareSlug(item, file, index))
+            );
+        }
+
+        async function copyTextToClipboard(text, successMessage) {
+            try {
+                if (navigator.clipboard?.writeText) {
+                    await navigator.clipboard.writeText(text);
+                } else {
+                    const field = document.createElement('textarea');
+                    field.value = text;
+                    field.setAttribute('readonly', '');
+                    field.style.position = 'absolute';
+                    field.style.left = '-9999px';
+                    document.body.appendChild(field);
+                    field.select();
+                    document.execCommand('copy');
+                    field.remove();
+                }
+
+                showToast(successMessage || 'Link copied.');
+            } catch (error) {
+                showToast('Could not copy the link automatically.', 'error');
+            }
+        }
+
+        function parseShareRoute(hash = window.location.hash) {
+            const match = String(hash || '').match(/^#\/(item|watch)\/([^/]+)(?:\/([^/]+))?$/);
+            if (!match) return null;
+
+            return {
+                type: match[1],
+                itemSlug: decodeURIComponent(match[2] || ''),
+                fileSlug: decodeURIComponent(match[3] || '')
+            };
+        }
+
+        function userCanAccessItem(item) {
+            return item?.status === 'approved' || (state.user && !state.user.isAnonymous && item?.submitterUid === state.user.uid);
+        }
+
+        function findItemByShareSlug(slug) {
+            return state.allItems.find(item => userCanAccessItem(item) && getItemShareSlug(item) === slug) || null;
+        }
+
+        function findFileByShareSlug(item, fileSlug) {
+            const files = Array.isArray(item?.files) ? item.files : [];
+
+            for (let index = 0; index < files.length; index++) {
+                const file = files[index];
+                if (getFileShareSlug(item, file, index) === fileSlug) {
+                    return { file, index };
+                }
+            }
+
+            return null;
+        }
+
+        function clearShareHash() {
+            if (!parseShareRoute()) return;
+            history.pushState({}, '', getPublicAppBaseUrl());
+            state.lastHandledShareRoute = '';
+        }
+
+        function handleShareRoute() {
+            const route = parseShareRoute();
+            const routeKey = route ? `${route.type}:${route.itemSlug}:${route.fileSlug || ''}` : '';
+
+            if (!route) {
+                state.lastHandledShareRoute = '';
+                const modal = document.getElementById('modal-container');
+                if (modal && !modal.classList.contains('hidden') && modal.dataset.shareRoute === 'true') {
+                    window.closeModal(false);
+                }
+                return;
+            }
+
+            if (routeKey === state.lastHandledShareRoute || !state.allItems.length) return;
+
+            const item = findItemByShareSlug(route.itemSlug);
+            if (!item) return;
+
+            state.lastHandledShareRoute = routeKey;
+
+            if (route.type === 'watch' && route.fileSlug) {
+                const match = findFileByShareSlug(item, route.fileSlug);
+                if (match && getEmbeddableVideoMeta(match.file)) {
+                    window.openVideoFromItem(item.id, route.fileSlug, { syncHash: false });
+                    return;
+                }
+            }
+
+            window.openItemModal(item.id, { syncHash: false });
+        }
 
         async function init() {
             renderLoading();
@@ -67,6 +190,8 @@
                     await signInAnonymously(auth);
                 }
 
+                window.addEventListener('hashchange', handleShareRoute);
+
                 onAuthStateChanged(auth, (user) => {
                     state.user = user;
                     updateAuthUI();
@@ -81,10 +206,21 @@
             if (!unsubPublic) {
                 const itemsRef = collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items');
                 unsubPublic = onSnapshot(itemsRef, (snapshot) => {
-                    state.allItems = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    state.allItems = snapshot.docs.map(doc => {
+                        const rawItem = { id: doc.id, ...doc.data() };
+                        return {
+                            ...rawItem,
+                            category: normalizeCategory(rawItem.category),
+                            files: (rawItem.files || []).map(file => ({
+                                ...file,
+                                type: normalizeCategory(file.type || rawItem.category)
+                            }))
+                        };
+                    });
                     state.items = state.allItems.filter(i => i.status === 'approved');
                     state.isLoading = false;
                     render();
+                    handleShareRoute();
                 }, (error) => console.error("Data fetch error:", error));
             }
 
@@ -104,6 +240,7 @@
 
         // Navigation & Editing router logic
         window.navigate = (view, itemId = null) => {
+            if (parseShareRoute()) clearShareHash();
             if ((view === 'submit' || view === 'my_folders' || view === 'folder_view') && (!state.user || state.user.isAnonymous)) {
                 showAuthModal('login');
                 return;
@@ -118,11 +255,12 @@
                         state.editingItemId = itemId;
                         state.originalItem = item; // Keep track of the original
                         state.draftFolderId = item.folderId || '';
-                        state.draftMeta = { title: item.title, description: item.description, category: item.category };
+                        state.draftMeta = { title: item.title, description: item.description, category: normalizeCategory(item.category) };
                         state.draftImage = { inputType: 'url', url: item.imageUrl || '', file: null };
                         state.draftFiles = (item.files || []).map((f, i) => ({ 
                             ...f, 
                             id: Date.now() + i, 
+                            type: normalizeCategory(f.type || item.category),
                             inputType: 'url' // Treat existing file links as URLs internally to preserve them
                         }));
                     }
@@ -182,17 +320,25 @@
             setTimeout(() => { toast.classList.add('translate-y-10', 'opacity-0'); setTimeout(() => toast.remove(), 300); }, 3000);
         };
 
-        window.openModal = (htmlContent) => {
+        window.openModal = (htmlContent, options = {}) => {
             const modal = document.getElementById('modal-container');
             modal.innerHTML = htmlContent;
+            modal.dataset.shareRoute = options.shareRoute ? 'true' : '';
             modal.classList.remove('hidden');
             setTimeout(() => modal.classList.remove('opacity-0'), 10);
         };
 
-        window.closeModal = () => {
+        window.closeModal = (clearShareRouteOnClose = true) => {
+            if (clearShareRouteOnClose && parseShareRoute()) {
+                clearShareHash();
+            }
             const modal = document.getElementById('modal-container');
             modal.classList.add('opacity-0');
-            setTimeout(() => { modal.classList.add('hidden'); modal.innerHTML = ''; }, 300);
+            setTimeout(() => {
+                modal.classList.add('hidden');
+                modal.innerHTML = '';
+                delete modal.dataset.shareRoute;
+            }, 300);
         };
 
         window.showLegalModal = (type) => {
@@ -219,12 +365,6 @@
                 </div>
             `;
             openModal(content);
-        }
-
-        function getYouTubeId(url) {
-            const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
-            const match = url?.match(regExp);
-            return (match && match[2].length === 11) ? match[2] : null;
         }
 
         // Auth Handlers
@@ -287,7 +427,25 @@
         };
 
         // Modals
+        window.copyItemShareLink = async (itemId) => {
+            const item = state.allItems.find(entry => entry.id === itemId);
+            if (!item) return;
+            await copyTextToClipboard(buildItemShareUrl(item), "Item link copied.");
+        };
+
+        window.copyFileShareLink = async (itemId, fileShareSlug) => {
+            const item = state.allItems.find(entry => entry.id === itemId);
+            if (!item) return;
+
+            const match = findFileByShareSlug(item, fileShareSlug);
+            if (!match) return;
+
+            await copyTextToClipboard(buildFileShareUrl(item, match.file, match.index), "File link copied.");
+        };
+
         window.playVideo = (ytId) => {
+            const video = getEmbeddableVideoMeta(`https://www.youtube.com/watch?v=${ytId}`);
+            if (!video) return;
             openModal(`
                 <div class="bg-gray-900 rounded-xl w-full max-w-5xl border border-gray-700 shadow-2xl relative overflow-hidden flex flex-col fade-in">
                     <div class="p-4 flex justify-between items-center border-b border-gray-800 bg-black/50">
@@ -295,23 +453,101 @@
                         <button onclick="closeModal()" class="text-gray-400 hover:text-white transition-colors p-1"><i class="fa-solid fa-times text-2xl"></i></button>
                     </div>
                     <div class="relative w-full bg-black" style="padding-top: 56.25%;">
-                        <iframe class="absolute inset-0 w-full h-full" src="https://www.youtube.com/embed/${ytId}?autoplay=1&rel=0" frameborder="0" allowfullscreen></iframe>
+                        <iframe class="absolute inset-0 w-full h-full" src="${video.embedUrl}" referrerpolicy="strict-origin-when-cross-origin" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" frameborder="0" allowfullscreen></iframe>
                     </div>
                 </div>
             `);
         };
 
-        window.openItemModal = (id) => {
+        window.openVideoFromItem = (itemId, fileShareSlug = '', options = {}) => {
+            const item = state.allItems.find(entry => entry.id === itemId);
+            if (!item || !userCanAccessItem(item)) return;
+
+            let fileMatch = null;
+
+            if (fileShareSlug) {
+                fileMatch = findFileByShareSlug(item, fileShareSlug);
+            }
+
+            if (!fileMatch) {
+                const primaryVideo = getPrimaryEmbeddableVideo(item);
+                if (primaryVideo) {
+                    fileMatch = { file: primaryVideo.file, index: primaryVideo.index };
+                    fileShareSlug = primaryVideo.shareSlug;
+                }
+            }
+
+            if (!fileMatch) {
+                window.openItemModal(itemId, { syncHash: options.syncHash });
+                return;
+            }
+
+            const video = getEmbeddableVideoMeta(fileMatch.file);
+            if (!video) {
+                window.openItemModal(itemId, { syncHash: options.syncHash });
+                return;
+            }
+
+            if (options.syncHash !== false) {
+                const itemSlug = getItemShareSlug(item);
+                const resolvedFileShareSlug = fileShareSlug || getFileShareSlug(item, fileMatch.file, fileMatch.index);
+                const nextHash = buildFileShareHash(itemSlug, resolvedFileShareSlug);
+                state.lastHandledShareRoute = `watch:${itemSlug}:${resolvedFileShareSlug}`;
+                if (window.location.hash !== nextHash) {
+                    window.location.hash = nextHash;
+                }
+            }
+
+            openModal(`
+                <div class="bg-gray-900 rounded-xl w-full max-w-5xl border border-gray-700 shadow-2xl relative overflow-hidden flex flex-col fade-in">
+                    <div class="p-4 flex flex-wrap justify-between items-center gap-3 border-b border-gray-800 bg-black/50">
+                        <div>
+                            <h3 class="text-white font-bold flex items-center"><i class="fa-brands fa-youtube text-red-500 mr-2 text-xl"></i> ${escapeHtml(fileMatch.file.name || item.title || 'Secure Video Player')}</h3>
+                            <p class="text-xs text-gray-500 mt-1">${escapeHtml(item.title || 'Shared video')}</p>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button onclick="copyFileShareLink('${item.id}', '${fileShareSlug || getFileShareSlug(item, fileMatch.file, fileMatch.index)}')" class="bg-gray-800 hover:bg-gray-700 text-white px-3 py-2 rounded-lg text-xs font-bold transition flex items-center gap-2 border border-gray-700">
+                                <i class="fa-solid fa-link"></i> Copy Link
+                            </button>
+                            <button onclick="closeModal()" class="text-gray-400 hover:text-white transition-colors p-1"><i class="fa-solid fa-times text-2xl"></i></button>
+                        </div>
+                    </div>
+                    <div class="relative w-full bg-black" style="padding-top: 56.25%;">
+                        <iframe class="absolute inset-0 w-full h-full" src="${video.embedUrl}" referrerpolicy="strict-origin-when-cross-origin" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" frameborder="0" allowfullscreen></iframe>
+                    </div>
+                    <div class="px-5 py-4 border-t border-gray-800 flex flex-wrap gap-3 text-xs bg-gray-950/80">
+                        <a href="${video.watchUrl}" target="_blank" rel="noopener noreferrer" class="bg-red-600 hover:bg-red-500 text-white px-3 py-2 rounded-lg font-bold transition flex items-center gap-2">
+                            <i class="fa-brands fa-youtube"></i> Open on YouTube
+                        </a>
+                        <button onclick="copyItemShareLink('${item.id}')" class="bg-gray-800 hover:bg-gray-700 text-white px-3 py-2 rounded-lg font-bold transition flex items-center gap-2 border border-gray-700">
+                            <i class="fa-solid fa-folder-open"></i> Copy Item Link
+                        </button>
+                    </div>
+                </div>
+            `, { shareRoute: true });
+        };
+
+        window.openItemModal = (id, options = {}) => {
             const item = state.allItems.find(i => i.id === id); 
-            if (!item) return;
+            if (!item || !userCanAccessItem(item)) return;
 
             const imgUrl = getRenderableImageUrl(item, 'https://via.placeholder.com/800x400/1f2937/4b5563?text=Cover+Art');
-            const catInfo = CATEGORIES[item.category] || CATEGORIES['other'];
+            const catInfo = getCategoryInfo(item.category);
             const isOwner = state.user && !state.user.isAnonymous && item.submitterUid === state.user.uid;
+            const primaryVideo = getPrimaryEmbeddableVideo(item);
 
             let filesHTML = item.files && item.files.length > 0 
-                ? item.files.map(f => getFileModalRowHTML(item, f)).join('')
+                ? item.files.map((f, index) => getFileModalRowHTML(item, f, index)).join('')
                 : `<p class="text-gray-500 italic p-4 text-center bg-gray-800 rounded-xl border border-gray-700">No downloadable files attached.</p>`;
+
+            if (options.syncHash !== false) {
+                const itemSlug = getItemShareSlug(item);
+                const nextHash = buildItemShareHash(itemSlug);
+                state.lastHandledShareRoute = `item:${itemSlug}:`;
+                if (window.location.hash !== nextHash) {
+                    window.location.hash = nextHash;
+                }
+            }
 
             openModal(`
                 <div class="bg-gray-900 rounded-2xl w-full max-w-4xl border border-gray-700 shadow-2xl relative overflow-hidden flex flex-col fade-in max-h-[90vh] overflow-y-auto">
@@ -324,6 +560,16 @@
                                 <span class="px-3 py-1 bg-gray-800/80 text-gray-300 text-xs rounded-full uppercase font-bold border border-gray-600 mb-3 inline-flex items-center gap-2 backdrop-blur-sm"><i class="fa-solid ${catInfo.icon} ${catInfo.color}"></i> ${catInfo.label}</span>
                                 <h2 class="text-3xl sm:text-5xl font-extrabold text-white">${item.title}</h2>
                                 <p class="text-gray-400 mt-3 flex items-center gap-2 text-sm"><img src="https://ui-avatars.com/api/?name=${item.submitterEmail || 'User'}&background=2563eb&color=fff&rounded=true&size=24" class="w-6 h-6 rounded-full border border-gray-600"> Uploaded by <span class="text-gray-200 font-medium">${item.submitterEmail || 'Verified Member'}</span></p>
+                                <div class="flex flex-wrap gap-3 mt-4">
+                                    ${primaryVideo ? `
+                                        <button onclick="openVideoFromItem('${item.id}', '${primaryVideo.shareSlug}')" class="bg-red-600 hover:bg-red-500 text-white px-4 py-2 rounded-lg text-sm font-bold shadow flex items-center gap-2 transition-colors">
+                                            <i class="fa-brands fa-youtube"></i> Watch
+                                        </button>
+                                    ` : ''}
+                                    <button onclick="copyItemShareLink('${item.id}')" class="bg-gray-800/90 hover:bg-gray-700 text-white px-4 py-2 rounded-lg text-sm font-bold shadow flex items-center gap-2 transition-colors border border-gray-700">
+                                        <i class="fa-solid fa-link"></i> Copy Item Link
+                                    </button>
+                                </div>
                             </div>
                             ${isOwner ? `
                                 <button onclick="closeModal(); navigate('submit', '${item.id}')" class="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-bold shadow flex items-center gap-2 transition-colors"><i class="fa-solid fa-pen"></i> Edit</button>
@@ -346,7 +592,7 @@
                         </div>
                     </div>
                 </div>
-            `);
+            `, { shareRoute: true });
         };
 
         // Workspace Features
@@ -462,16 +708,15 @@
 
             const renderCard = (item) => {
                 let imgUrl = getRenderableImageUrl(item, 'https://via.placeholder.com/400x225/1f2937/4b5563?text=Verified+Content');
-                const catInfo = CATEGORIES[item.category] || CATEGORIES['collection'];
-                let isVideo = item.category === 'video';
-                let primaryVideoId = isVideo && item.files?.length ? getYouTubeId(item.files[0].url) : null;
-                if (primaryVideoId) imgUrl = `https://img.youtube.com/vi/${primaryVideoId}/hqdefault.jpg`;
+                const catInfo = getCategoryInfo(item.category);
+                const primaryVideo = getPrimaryEmbeddableVideo(item);
+                if (primaryVideo?.thumbnailUrl) imgUrl = primaryVideo.thumbnailUrl;
 
                 return `
-                    <div class="bg-gray-800 rounded-2xl overflow-hidden shadow-lg border border-gray-700 hover:border-blue-500/50 transition-all duration-300 flex flex-col fade-in group cursor-pointer" onclick="${primaryVideoId ? `playVideo('${primaryVideoId}')` : `openItemModal('${item.id}')`}">
+                    <div class="bg-gray-800 rounded-2xl overflow-hidden shadow-lg border border-gray-700 hover:border-blue-500/50 transition-all duration-300 flex flex-col fade-in group cursor-pointer" onclick="${primaryVideo ? `openVideoFromItem('${item.id}', '${primaryVideo.shareSlug}')` : `openItemModal('${item.id}')`}">
                         <div class="h-48 overflow-hidden relative bg-gray-900">
                             <div class="absolute inset-0 bg-gradient-to-t from-gray-900 via-transparent to-transparent z-10 opacity-80"></div>
-                            ${primaryVideoId ? `<div class="absolute inset-0 flex items-center justify-center z-20"><div class="w-14 h-14 bg-red-600/90 backdrop-blur rounded-full flex items-center justify-center shadow-2xl group-hover:scale-110 transition duration-300 border-2 border-white/20"><i class="fa-solid fa-play text-white ml-1 text-xl"></i></div></div>` : ''}
+                            ${primaryVideo ? `<div class="absolute inset-0 flex items-center justify-center z-20"><div class="w-14 h-14 bg-red-600/90 backdrop-blur rounded-full flex items-center justify-center shadow-2xl group-hover:scale-110 transition duration-300 border-2 border-white/20"><i class="fa-solid fa-play text-white ml-1 text-xl"></i></div></div>` : ''}
                             <div class="absolute top-3 right-3 z-20"><span class="px-2.5 py-1 bg-black/70 text-[10px] rounded-md uppercase font-bold text-gray-200 border border-gray-600 backdrop-blur-md shadow-sm"><i class="fa-solid ${catInfo.icon} ${catInfo.color} mr-1"></i> ${catInfo.label}</span></div>
                             <img src="${imgUrl}" onerror="this.src='https://via.placeholder.com/400x225/1f2937/4b5563?text=Image+Not+Found'" class="w-full h-full object-cover group-hover:scale-105 transition duration-500">
                         </div>
@@ -658,34 +903,46 @@
             return item.imageUrl || fallbackUrl;
         }
 
-        function getFileModalRowHTML(item, file) {
+        function getFileModalRowHTML(item, file, index) {
             const reportUrl = file?.backendScan?.reportUrl;
             const isQuarantined = Boolean(file?.backendScan) && item.status !== 'approved';
             const hasDownload = Boolean(file?.url) && !isQuarantined;
+            const videoMeta = getEmbeddableVideoMeta(file);
+            const fileShareSlug = getFileShareSlug(item, file, index);
+            const fileType = getCategoryInfo(file?.type || item.category);
 
             let actionHTML = `<span class="bg-gray-700 text-gray-300 px-4 py-2 rounded-lg font-bold text-sm">Unavailable</span>`;
             if (isQuarantined && reportUrl) {
                 actionHTML = `<a href="${reportUrl}" target="_blank" class="bg-amber-600 hover:bg-amber-500 text-white px-5 py-2 rounded-lg font-bold shadow flex items-center gap-2 text-sm"><i class="fa-solid fa-file-shield"></i> <span class="hidden sm:inline">Scan Report</span></a>`;
+            } else if (videoMeta) {
+                actionHTML = `<button onclick="openVideoFromItem('${item.id}', '${fileShareSlug}')" class="bg-red-600 hover:bg-red-500 text-white px-5 py-2 rounded-lg font-bold shadow flex items-center gap-2 text-sm"><i class="fa-brands fa-youtube"></i> <span class="hidden sm:inline">Watch</span></button>`;
             } else if (hasDownload) {
                 actionHTML = `<a href="${file.url}" target="_blank" class="bg-blue-600 hover:bg-blue-500 text-white px-5 py-2 rounded-lg font-bold shadow flex items-center gap-2 text-sm"><i class="fa-solid fa-cloud-arrow-down"></i> <span class="hidden sm:inline">Download</span></a>`;
             }
 
             const statusText = isQuarantined
                 ? '<i class="fa-solid fa-clock mr-1"></i>Quarantined until admin release'
+                : videoMeta
+                ? '<i class="fa-brands fa-youtube mr-1"></i>Embeddable YouTube video'
                 : '<i class="fa-solid fa-shield-check mr-1"></i>Secure Link';
 
-            const statusClass = isQuarantined ? 'text-amber-400' : 'text-green-400';
+            const statusClass = isQuarantined ? 'text-amber-400' : videoMeta ? 'text-red-400' : 'text-green-400';
 
             return `
                 <div class="flex items-center justify-between bg-gray-800 border border-gray-700 p-4 rounded-xl mb-3 hover:border-blue-500/50 transition duration-300 gap-4">
                     <div class="flex items-center gap-4 min-w-0">
-                        <div class="w-10 h-10 rounded-lg bg-gray-700 flex items-center justify-center ${CATEGORIES[file.type]?.color || 'text-white'} bg-opacity-20 flex-shrink-0"><i class="fa-solid ${CATEGORIES[file.type]?.icon || 'fa-file'} text-lg"></i></div>
+                        <div class="w-10 h-10 rounded-lg bg-gray-700 flex items-center justify-center ${fileType.color || 'text-white'} bg-opacity-20 flex-shrink-0"><i class="fa-solid ${fileType.icon || 'fa-file'} text-lg"></i></div>
                         <div class="min-w-0">
                             <h4 class="text-white font-bold truncate max-w-[180px] sm:max-w-[300px] text-sm">${escapeHtml(file.name || 'File')}</h4>
                             <p class="text-xs ${statusClass} mt-0.5">${statusText}</p>
                         </div>
                     </div>
-                    <div class="flex-shrink-0">${actionHTML}</div>
+                    <div class="flex-shrink-0 flex items-center gap-2">
+                        ${actionHTML}
+                        <button onclick="copyFileShareLink('${item.id}', '${fileShareSlug}')" class="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded-lg font-bold text-sm transition flex items-center gap-2 border border-gray-600">
+                            <i class="fa-solid fa-link"></i> <span class="hidden sm:inline">Share</span>
+                        </button>
+                    </div>
                 </div>`;
         }
 
@@ -827,10 +1084,13 @@
             if (!state.user || state.user.isAnonymous) return showToast("You must log in securely.", "error");
             if (state.draftFiles.length === 0) return showToast("Add at least one file to upload.", "error");
 
-            const cat = state.draftMeta.category;
+            const cat = normalizeCategory(state.draftMeta.category);
             const title = state.draftMeta.title.trim();
             const desc = state.draftMeta.description.trim();
             const folderId = state.draftFolderId || null;
+            const itemShareSlug = state.originalItem
+                ? getItemShareSlug(state.originalItem)
+                : createShareSlug(title || 'item', 'item');
             clearAuditErrors();
 
             for(let f of state.draftFiles) {
@@ -902,7 +1162,15 @@
 
                 // Handle Attached Files
                 for (let draft of state.draftFiles) {
-                    let fileData = { name: draft.name, type: draft.type };
+                    let fileData = {
+                        name: draft.name,
+                        type: normalizeCategory(draft.type || cat),
+                        shareSlug: draft.shareSlug
+                            ? sanitizeShareSlug(draft.shareSlug, 'file')
+                            : state.originalItem
+                            ? getFileShareSlug(state.originalItem, draft, finalFiles.length)
+                            : createShareSlug(draft.name || draft.file?.name || `file-${finalFiles.length + 1}`, 'file')
+                    };
                     if (draft.inputType === 'url') {
                         fileData.url = draft.url;
                         if (draft.backendScan) fileData.backendScan = draft.backendScan;
@@ -943,6 +1211,7 @@
                 
                 const docData = {
                     category: cat, 
+                    shareSlug: itemShareSlug,
                     title, 
                     description: desc, 
                     imageUrl: finalImgUrl, 
