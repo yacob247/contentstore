@@ -1,5 +1,5 @@
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, deleteDoc, doc, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import {
             buildFileShareHash,
@@ -14,11 +14,12 @@
             sanitizeShareSlug
         } from "./content-link-utils.js";
 
-        let db, auth, currentTab = 'dashboard';
+        let firebaseApp, db, auth, currentTab = 'dashboard';
         let adminItems = [];
         let publicAdminItems = [];
         let sensitiveAdminItems = [];
         let adminInitPromise = null;
+        let authBootstrapPromise = null;
         let securityIncidents = [];
         const CATEGORY_INFO = {
             collection: { label: 'Collections (Mixed)', icon: 'fa-layer-group', color: 'text-purple-400' },
@@ -64,6 +65,16 @@
           appId: "1:303461259730:web:a1790a976b6d58d71dd00b",
           measurementId: "G-8YEJEBX0NE"
         };
+
+        function ensureFirebaseClients() {
+            if (!firebaseApp) {
+                firebaseApp = initializeApp(firebaseConfig);
+                auth = getAuth(firebaseApp);
+                db = getFirestore(firebaseApp);
+            }
+
+            return { firebaseApp, auth, db };
+        }
 
         // --- Core UI Utilities ---
         window.showToast = (message, type = 'success') => {
@@ -137,13 +148,29 @@
                 </div>`;
         }
 
+        async function getAdminRequestHeaders(includeJson = false) {
+            const headers = {};
+            if (includeJson) {
+                headers['Content-Type'] = 'application/json';
+            }
+            if (SECURITY_ADMIN_TOKEN) {
+                headers['x-security-admin-token'] = SECURITY_ADMIN_TOKEN;
+            }
+            if (auth?.currentUser) {
+                headers.Authorization = `Bearer ${await auth.currentUser.getIdToken()}`;
+            }
+
+            return headers;
+        }
+
         async function requestAdminSession(path, method, body) {
             let response = null;
             try {
+                const headers = await getAdminRequestHeaders(Boolean(body));
                 response = await fetch(buildSecurityBackendUrl(path), {
                     method,
                     credentials: 'include',
-                    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+                    headers: Object.keys(headers).length ? headers : undefined,
                     body: body ? JSON.stringify(body) : undefined
                 });
             } catch (error) {
@@ -164,10 +191,29 @@
             return payload;
         }
 
+        async function assertAdminAccess() {
+            const payload = await requestAdminSession('/api/admin/session', 'GET');
+            if (!payload?.authenticated) {
+                throw new Error('Cannot access.');
+            }
+            return payload;
+        }
+
         async function restoreAdminSession() {
             try {
-                const payload = await requestAdminSession('/api/admin/session', 'GET');
-                if (!payload?.authenticated) return;
+                ensureFirebaseClients();
+                if (!authBootstrapPromise) {
+                    authBootstrapPromise = new Promise((resolve) => {
+                        const unsubscribe = onAuthStateChanged(auth, (user) => {
+                            unsubscribe();
+                            resolve(user);
+                        });
+                    });
+                }
+
+                const user = await authBootstrapPromise;
+                if (!user || user.isAnonymous) return;
+                await assertAdminAccess();
                 showWorkspaceLoading('Restoring secure operator session...');
                 await init();
             } catch (error) {
@@ -181,15 +227,21 @@
 
             const form = e.currentTarget;
             const button = form?.querySelector('button[type="submit"]');
+            const email = document.getElementById('admin-email').value.trim();
             const password = document.getElementById('admin-key').value;
 
             if (button) button.disabled = true;
 
             try {
-                await requestAdminSession('/api/admin/session', 'POST', { password });
+                ensureFirebaseClients();
+                await signInWithEmailAndPassword(auth, email, password);
+                await assertAdminAccess();
                 showWorkspaceLoading('Validating secure access...');
                 await init();
             } catch (error) {
+                if (auth?.currentUser) {
+                    await signOut(auth).catch(() => {});
+                }
                 showToast(error.message || 'Cannot access.', 'error');
             } finally {
                 if (button) button.disabled = false;
@@ -198,7 +250,10 @@
 
         window.lockConsole = async () => {
             try {
-                await requestAdminSession('/api/admin/session', 'DELETE');
+                ensureFirebaseClients();
+                if (auth?.currentUser) {
+                    await signOut(auth);
+                }
             } catch (error) {
                 console.error('Admin session clear failed', error);
             }
@@ -213,11 +268,10 @@
             }
 
             adminInitPromise = (async () => {
-                const app = initializeApp(firebaseConfig);
-                auth = getAuth(app);
-                db = getFirestore(app);
-
-                await signInAnonymously(auth);
+                ensureFirebaseClients();
+                if (!auth?.currentUser || auth.currentUser.isAnonymous) {
+                    throw new Error('Cannot access.');
+                }
 
                 const q = collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items');
                 onSnapshot(q, snap => {
@@ -263,7 +317,11 @@
             const url = new URL(window.location.href);
             url.hash = '';
             url.search = '';
-            url.pathname = url.pathname.replace(/controladmin\.html$/i, 'index.html');
+            if (/\/[^/]+\.html$/i.test(url.pathname)) {
+                url.pathname = url.pathname.replace(/\/[^/]+\.html$/i, '/index.html');
+            } else if (url.pathname.endsWith('/')) {
+                url.pathname = `${url.pathname}index.html`;
+            }
             return url.toString();
         }
 
@@ -433,15 +491,9 @@
         }
 
         async function callSecurityBackend(path, method, body) {
-            const headers = {
-                'Content-Type': 'application/json'
-            };
-            if (SECURITY_ADMIN_TOKEN) {
-                headers['x-security-admin-token'] = SECURITY_ADMIN_TOKEN;
-            }
-
             let response = null;
             try {
+                const headers = await getAdminRequestHeaders(true);
                 response = await fetch(buildSecurityBackendUrl(path), {
                     method,
                     credentials: 'include',
@@ -560,6 +612,12 @@
                 if (SECURITY_ADMIN_TOKEN) {
                     xhr.setRequestHeader('x-security-admin-token', SECURITY_ADMIN_TOKEN);
                 }
+                const attachHeaders = async () => {
+                    if (auth?.currentUser) {
+                        const token = await auth.currentUser.getIdToken();
+                        xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+                    }
+                };
 
                 xhr.upload.onprogress = (e) => {
                     if (e.lengthComputable) {
@@ -588,7 +646,9 @@
                 };
 
                 xhr.onerror = () => reject(new Error("Could not reach the security backend."));
-                xhr.send(formData);
+                attachHeaders()
+                    .then(() => xhr.send(formData))
+                    .catch(() => reject(new Error('Cannot access.')));
             });
         }
 
