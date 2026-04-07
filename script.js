@@ -237,7 +237,7 @@
                 await init();
             } catch (error) {
                 console.error('Admin console bootstrap failed', error);
-                renderAdminBootstrapError('The console could not finish loading. If you want Cloudflare IP-only access, clear ADMIN_DASHBOARD_PASSWORD and SECURITY_ADMIN_TOKEN on the live backend, then reload this page.');
+                renderAdminBootstrapError('The console could not finish loading. If you want Cloudflare IP-only access, clear ADMIN_DASHBOARD_PASSWORD and SECURITY_ADMIN_TOKEN on the live backend, and disable any FIREBASE_ADMIN_* admin gate that still expects a signed-in operator, then reload this page.');
             }
         }
 
