@@ -7,8 +7,10 @@ import {
   FIX_REQUIRED_SIGNATURES,
   MALICIOUS_SIGNATURES,
   SAFE_URL_PROTOCOLS,
-  SCAN_BYTE_LIMIT
+  SCAN_BYTE_LIMIT,
+  ZIP_LIKE_EXTENSIONS
 } from "./sandbox-rules.js";
+import { isTrustedExternalUrl } from "../content-link-utils.js";
 
 function fillTemplate(template, values) {
   return template.replace(/\{\{(\w+)\}\}/g, (_, key) => String(values[key] ?? ""));
@@ -70,7 +72,7 @@ function isChangedValue(currentValue, originalValue) {
 function collectUrlValidationFindings(url, field) {
   if (!url) return [];
 
-  if (!ALLOW_EXTERNAL_URLS) {
+  if (!ALLOW_EXTERNAL_URLS && !isTrustedExternalUrl(url)) {
     return [
       makeFinding(
         "external_urls_disabled",
@@ -176,6 +178,60 @@ function buildSignatureReason(name, ruleMessage, match, mode) {
   });
 }
 
+function hasRuleIgnoreMarker(rule, lowerText, archiveEntryNames) {
+  const markers = Array.isArray(rule?.ignoreWhenMarkersPresent) ? rule.ignoreWhenMarkersPresent : [];
+  if (!markers.length) return false;
+
+  return markers.some((marker) => {
+    const lowerMarker = String(marker).toLowerCase();
+    return lowerText.includes(lowerMarker) || archiveEntryNames.some((entryName) => entryName.toLowerCase().includes(lowerMarker));
+  });
+}
+
+function getRuleScanText(rule, lowerText, extension) {
+  if (ZIP_LIKE_EXTENSIONS.includes(extension) && rule?.skipRawArchiveBytes) return "";
+  return lowerText;
+}
+
+function matchesRequiredContext(rule, lowerText, matchIndex, patternLength) {
+  const contextPatterns = Array.isArray(rule?.requiresContextAnyOf) ? rule.requiresContextAnyOf : [];
+  if (!contextPatterns.length) return true;
+
+  const radius = Number(rule?.contextWindowChars || 80);
+  const snippet = lowerText.slice(Math.max(0, matchIndex - radius), Math.min(lowerText.length, matchIndex + patternLength + radius));
+  return contextPatterns.some((pattern) => snippet.includes(String(pattern).toLowerCase()));
+}
+
+function findPatternMatchForRule({ lowerText, archiveEntryNames }, rule) {
+  const patterns = Array.isArray(rule?.patterns) ? rule.patterns : [];
+  const allowedSources = Array.isArray(rule?.allowedSources) && rule.allowedSources.length
+    ? rule.allowedSources
+    : ["archive_entry_name", "file_content"];
+
+  for (const pattern of patterns) {
+    const lowerPattern = pattern.toLowerCase();
+
+    if (allowedSources.includes("archive_entry_name")) {
+      const matchedEntryName = archiveEntryNames.find((entryName) => entryName.toLowerCase().includes(lowerPattern));
+      if (matchedEntryName) {
+        return { matchedPattern: pattern, source: "archive_entry_name", detail: matchedEntryName };
+      }
+    }
+
+    if (allowedSources.includes("file_content") && lowerText) {
+      let matchIndex = lowerText.indexOf(lowerPattern);
+      while (matchIndex !== -1) {
+        if (matchesRequiredContext(rule, lowerText, matchIndex, lowerPattern.length)) {
+          return { matchedPattern: pattern, source: "file_content" };
+        }
+        matchIndex = lowerText.indexOf(lowerPattern, matchIndex + lowerPattern.length);
+      }
+    }
+  }
+
+  return null;
+}
+
 async function collectLocalFileFindings(file, displayName) {
   const name = file?.name || displayName || "Uploaded file";
   if (!file) return [];
@@ -226,7 +282,10 @@ async function collectLocalFileFindings(file, displayName) {
   }
 
   for (const rule of MALICIOUS_SIGNATURES) {
-    const match = findPatternMatch({ lowerText, archiveEntryNames }, rule.patterns);
+    const match = findPatternMatchForRule(
+      { lowerText: getRuleScanText(rule, lowerText, extension), archiveEntryNames },
+      rule
+    );
     if (!match) continue;
 
     findings.push(
@@ -250,7 +309,12 @@ async function collectLocalFileFindings(file, displayName) {
   }
 
   for (const rule of FIX_REQUIRED_SIGNATURES) {
-    const match = findPatternMatch({ lowerText, archiveEntryNames }, rule.patterns);
+    if (hasRuleIgnoreMarker(rule, lowerText, archiveEntryNames)) continue;
+
+    const match = findPatternMatchForRule(
+      { lowerText: getRuleScanText(rule, lowerText, extension), archiveEntryNames },
+      rule
+    );
     if (!match) continue;
 
     findings.push(
