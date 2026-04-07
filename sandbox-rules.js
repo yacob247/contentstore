@@ -2,6 +2,8 @@ export const SCAN_BYTE_LIMIT = 2097152;
 
 export const SAFE_URL_PROTOCOLS = ["http:", "https:"];
 
+export const ZIP_LIKE_EXTENSIONS = ["zip", "jar", "apk", "docx", "xlsx", "pptx"];
+
 export const ALLOW_EXTERNAL_URLS = false;
 
 export const ALWAYS_REQUIRE_MANUAL_REVIEW = true;
@@ -112,16 +114,51 @@ export const FIX_REQUIRED_SIGNATURES = [
   {
     id: "directx8_runtime",
     patterns: ["d3d8.dll"],
+    allowedSources: ["file_content"],
+    skipRawArchiveBytes: true,
+    requiresContextAnyOf: [
+      "missing",
+      "not found",
+      "requires",
+      "required",
+      "need ",
+      "needs ",
+      "dependency",
+      "unable to",
+      "could not",
+      "cannot",
+      "failed",
+      "error"
+    ],
+    ignoreWhenMarkersPresent: ["dgvoodoo.conf", "dgvoodoocpl.exe", "readmedirectx.url"],
     message: "it references d3d8.dll. Bundle the required DirectX runtime or include setup instructions before resubmitting."
   },
   {
     id: "cd_media",
     patterns: ["mscdex", "requires cd", "insert cd", "cd-rom", "cdrom"],
+    allowedSources: ["file_content"],
     message: "it appears to require CD media or virtual-drive setup. Explain that requirement clearly before resubmitting."
   },
   {
     id: "glide_runtime",
     patterns: ["glide2x.dll", "glide3x.dll"],
+    allowedSources: ["file_content"],
+    skipRawArchiveBytes: true,
+    requiresContextAnyOf: [
+      "missing",
+      "not found",
+      "requires",
+      "required",
+      "need ",
+      "needs ",
+      "dependency",
+      "unable to",
+      "could not",
+      "cannot",
+      "failed",
+      "error"
+    ],
+    ignoreWhenMarkersPresent: ["dgvoodoo.conf", "dgvoodoocpl.exe", "readmeglide.url", "glide.dll"],
     message: "it references Glide runtime files. Include compatible wrappers or setup notes before resubmitting."
   }
 ];
