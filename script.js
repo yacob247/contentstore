@@ -185,6 +185,18 @@
             return buildSecurityBackendUrl(`/api/uploads/${scanId}/file`);
         }
 
+        function getSecurityBackendDownloadUrl(downloadId) {
+            return buildSecurityBackendUrl(`/api/downloads/${downloadId}`);
+        }
+
+        function resolveSecurityBackendDownloadUrl(reportOrScan) {
+            const downloadId = reportOrScan?.downloadId || reportOrScan?.links?.downloadId || reportOrScan?.id;
+            if (reportOrScan?.downloadPath) {
+                return buildSecurityBackendUrl(reportOrScan.downloadPath);
+            }
+            return getSecurityBackendDownloadUrl(downloadId);
+        }
+
         async function copyTextToClipboard(text, successMessage) {
             try {
                 if (navigator.clipboard?.writeText) {
@@ -224,7 +236,13 @@
             const match = files.findIndex((file, index) => getFileShareSlug(item, file, index) === fileShareSlug);
             if (match === -1) return;
 
-            await copyTextToClipboard(buildFileShareUrl(item, files[match], match), "File link copied.");
+            const targetFile = files[match];
+            const videoMeta = getEmbeddableVideoMeta(targetFile);
+            const linkToCopy = videoMeta
+                ? buildFileShareUrl(item, targetFile, match)
+                : (targetFile?.url || buildFileShareUrl(item, targetFile, match));
+
+            await copyTextToClipboard(linkToCopy, videoMeta ? "Video link copied." : "Download link copied.");
         };
 
         window.openPublicItem = (id) => {
@@ -368,12 +386,15 @@
 
         function buildBackendScanMetaFromReport(report) {
             if (!report?.id) return null;
+            const downloadId = report?.links?.downloadId || report?.downloadId || report.id;
             return {
                 id: report.id,
+                downloadId,
                 status: report.status,
                 verdict: report.verdict,
                 reportUrl: getSecurityBackendReportUrl(report.id),
                 fileUrl: getSecurityBackendFileUrl(report.id),
+                downloadUrl: resolveSecurityBackendDownloadUrl(report),
                 findings: (report.findings || []).map(finding => ({
                     kind: finding.kind || '',
                     severity: finding.severity || '',
@@ -1300,7 +1321,7 @@
                     createdAt: serverTimestamp(),
                     files: [{
                         name: resolvedFileLabel,
-                        url: getSecurityBackendFileUrl(scanPayload.id),
+                        url: resolveSecurityBackendDownloadUrl(releasePayload),
                         type: cat,
                         shareSlug: fileShareSlug,
                         size: (file.size / (1024 * 1024)).toFixed(2) + ' MB',
