@@ -53,6 +53,8 @@
         }
 
         const SECURITY_BACKEND_BASE_URL = resolveSecurityBackendBaseUrl().replace(/\/+$/, '');
+        const SECURITY_BACKEND_HEALTH_TIMEOUT_MS = 4000;
+        const SECURITY_BACKEND_UPLOAD_TIMEOUT_MS = 120000;
         const SECURITY_ADMIN_TOKEN = typeof __security_admin_token !== 'undefined' ? __security_admin_token : '';
 
         const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
@@ -325,8 +327,25 @@
             return status === 404 || status === 405;
         }
 
-        function isBackendUploadRouteUnavailable(error) {
-            return Number(error?.status || 0) === 405;
+        async function ensureSecurityBackendReady() {
+            const controller = new AbortController();
+            const timeoutId = window.setTimeout(() => controller.abort(), SECURITY_BACKEND_HEALTH_TIMEOUT_MS);
+
+            try {
+                const response = await fetch(buildSecurityBackendUrl('/api/health'), {
+                    method: 'GET',
+                    cache: 'no-store',
+                    signal: controller.signal
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Security backend health check failed (${response.status}).`);
+                }
+            } catch (error) {
+                throw new Error('Security backend is unavailable right now. File uploads cannot continue until the scan service is reachable.');
+            } finally {
+                window.clearTimeout(timeoutId);
+            }
         }
 
         function getCategoryInfo(category) {
@@ -628,6 +647,7 @@
             return await new Promise((resolve, reject) => {
                 const xhr = new XMLHttpRequest();
                 xhr.open('POST', buildSecurityBackendUrl('/api/uploads/scan'));
+                xhr.timeout = SECURITY_BACKEND_UPLOAD_TIMEOUT_MS;
                 xhr.withCredentials = true;
                 if (SECURITY_ADMIN_TOKEN) {
                     xhr.setRequestHeader('x-security-admin-token', SECURITY_ADMIN_TOKEN);
@@ -669,44 +689,35 @@
                 };
 
                 xhr.onerror = () => reject(new Error("Could not reach the security backend."));
+                xhr.ontimeout = () => reject(new Error("Security backend scan timed out before the file finished processing."));
                 attachHeaders()
                     .then(() => xhr.send(formData))
                     .catch(() => reject(new Error('Cannot access.')));
             });
         }
 
-        async function uploadPublicAdminFileWithStorageFallback(file, metadata, updateStatusFn) {
-            try {
-                const scanPayload = await uploadToSecurityBackend(file, metadata, updateStatusFn);
-                updateStatusFn(88, "Releasing clean admin upload from quarantine...");
-                const releasePayload = await callSecurityBackend(`/api/uploads/${scanPayload.id}/release`, 'POST', { actor: 'admin-upload' });
-                return {
-                    storageProvider: 'backend',
-                    url: resolveSecurityBackendDownloadUrl(releasePayload),
-                    backendScan: buildBackendScanMetaFromReport(releasePayload.report)
-                };
-            } catch (error) {
-                if (!isBackendUploadRouteUnavailable(error)) {
-                    throw error;
+        async function scanAdminFileThenUploadToGofile(file, metadata, updateStatusFn) {
+            updateStatusFn(3, "Checking security backend...");
+            await ensureSecurityBackendReady();
+            updateStatusFn(6, "Sending file to security backend...");
+            await uploadToSecurityBackend(file, metadata, updateStatusFn);
+
+            const gofileUpload = await uploadFileToGofile(file, {
+                onProgress: (e) => {
+                    if (!e.lengthComputable) return;
+                    const percent = 55 + ((e.loaded / e.total) * 40);
+                    const mbLoaded = Math.round((e.loaded / 1024 / 1024) * 10) / 10;
+                    const mbTotal = Math.round((e.total / 1024 / 1024) * 10) / 10;
+                    updateStatusFn(percent, `Security scan passed. Uploading clean file to Gofile: ${mbLoaded}MB / ${mbTotal}MB`);
                 }
+            });
 
-                const gofileUpload = await uploadFileToGofile(file, {
-                    onProgress: (e) => {
-                        if (!e.lengthComputable) return;
-                        const percent = 12 + ((e.loaded / e.total) * 76);
-                        const mbLoaded = Math.round((e.loaded / 1024 / 1024) * 10) / 10;
-                        const mbTotal = Math.round((e.total / 1024 / 1024) * 10) / 10;
-                        updateStatusFn(percent, `Backend upload route unavailable. Uploading to Gofile: ${mbLoaded}MB / ${mbTotal}MB`);
-                    }
-                });
-
-                return {
-                    storageProvider: 'gofile',
-                    url: gofileUpload.directUrl || gofileUpload.url,
-                    backendScan: null,
-                    gofile: gofileUpload
-                };
-            }
+            return {
+                storageProvider: 'gofile',
+                url: gofileUpload.directUrl || gofileUpload.url,
+                backendScan: null,
+                gofile: gofileUpload
+            };
         }
 
         async function releaseItemSecurityAssets(item) {
@@ -1666,8 +1677,8 @@
                         backendScan: buildBackendScanMetaFromReport(releasePayload.report)
                     };
                 } else {
-                    updateStatus(5, "Sending file to protected storage...");
-                    uploadResult = await uploadPublicAdminFileWithStorageFallback(file, uploadMetadata, updateStatus);
+                    updateStatus(5, "Preparing backend security scan...");
+                    uploadResult = await scanAdminFileThenUploadToGofile(file, uploadMetadata, updateStatus);
                 }
 
                 updateStatus(95, "Syncing metadata with Database...");
@@ -1716,7 +1727,7 @@
                 showToast(visibility === 'sensitive'
                     ? "Sensitive file stored in backend-only catalog and protected routes."
                     : uploadResult.storageProvider === 'gofile'
-                        ? "Backend upload route was unavailable, so the file was stored on Gofile and synced to the Hub."
+                        ? "File passed backend scanning, then was stored on Gofile and synced to the Hub."
                         : "Stream scanned, released, and synced to the Hub!");
                 await refreshSecurityIncidents();
                 
