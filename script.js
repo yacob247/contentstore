@@ -31,13 +31,21 @@
             other: { label: 'Misc / Other', icon: 'fa-file-lines', color: 'text-gray-400' }
         };
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'infinite-nexus-v1';
+        function isLoopbackHostname(hostname) {
+            return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+        }
+
         function resolveSecurityBackendBaseUrl() {
             if (typeof __security_backend_url !== 'undefined' && __security_backend_url) {
                 return __security_backend_url;
             }
 
             if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
-                return `${window.location.protocol}//${window.location.hostname}:8787`;
+                if (isLoopbackHostname(window.location.hostname)) {
+                    return `${window.location.protocol}//${window.location.hostname}:8787`;
+                }
+
+                return window.location.origin;
             }
 
             return 'http://127.0.0.1:8787';
