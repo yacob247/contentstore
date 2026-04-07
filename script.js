@@ -506,6 +506,9 @@
             }
 
             if (!response.ok) {
+                if (response.status === 405) {
+                    throw new Error('This action needs a live backend API route, but this site is only serving the frontend for that path right now.');
+                }
                 throw new Error(payload?.error || `Security backend request failed (${response.status}).`);
             }
 
@@ -632,6 +635,11 @@
 
                     if (xhr.status >= 200 && xhr.status < 300 && payload) {
                         resolve(payload);
+                        return;
+                    }
+
+                    if (xhr.status === 405) {
+                        reject(new Error("Upload mode needs a live backend at /api/uploads/scan. Use 'Direct URL / YouTube' with 'Public Catalog', or deploy the backend proxy."));
                         return;
                     }
 
@@ -1442,6 +1450,7 @@
                                         <label class="flex items-center gap-2 cursor-pointer"><input type="radio" name="up-source" value="upload" checked onchange="toggleAdminUploadSource(this.value)" class="h-4 w-4 text-blue-500"> Backend Scanned File</label>
                                         <label class="flex items-center gap-2 cursor-pointer"><input type="radio" name="up-source" value="url" onchange="toggleAdminUploadSource(this.value)" class="h-4 w-4 text-blue-500"> Direct URL / YouTube</label>
                                     </div>
+                                    <p class="text-xs text-gray-500 mt-2"><code>Backend Scanned File</code> requires a live <code>/api/uploads/scan</code> backend. <code>Direct URL / YouTube</code> with <code>Public Catalog</code> still writes to the same public app catalog as <code>app.js</code>.</p>
                                 </div>
                                 <div class="group">
                                     <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Storage Mode</label>
