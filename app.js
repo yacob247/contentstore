@@ -1,7 +1,7 @@
    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, deleteDoc, doc, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        import { auditSubmissionDraft } from "./sandbox-auditor.js";
+        import { auditSubmissionDraft } from "./security/sandbox-auditor.js";
         import { uploadFileToGofile } from "./gofile-storage.js";
         import {
             buildFileShareHash,
@@ -22,7 +22,6 @@
             currentView: 'home',
             currentCategory: 'all',
             publicCatalogItems: [],
-            loadedSensitiveItems: [],
             allItems: [], 
             items: [],    
             folders: [],  
@@ -37,8 +36,7 @@
             draftImage: { inputType: 'url', url: '', file: null },
             draftFiles: [],
             auditErrors: [],
-            lastHandledShareRoute: '',
-            lastDeniedShareRoute: ''
+            lastHandledShareRoute: ''
         };
 
         const CATEGORIES = {
@@ -96,17 +94,8 @@
         }
 
         function syncCatalogCollections() {
-            state.allItems = [...state.publicCatalogItems, ...state.loadedSensitiveItems];
+            state.allItems = [...state.publicCatalogItems];
             state.items = state.publicCatalogItems.filter(i => i.status === 'approved');
-        }
-
-        function upsertLoadedSensitiveItem(item) {
-            const normalized = normalizeCatalogItemRecord(item, 'backend_sensitive');
-            const nextItems = state.loadedSensitiveItems.filter(entry => entry.id !== normalized.id);
-            nextItems.push(normalized);
-            state.loadedSensitiveItems = nextItems;
-            syncCatalogCollections();
-            return normalized;
         }
 
         function getPublicAppBaseUrl() {
@@ -184,28 +173,12 @@
             state.lastHandledShareRoute = '';
         }
 
-        function openCannotAccessModal() {
-            openModal(`
-                <div class="bg-gray-900 rounded-2xl w-full max-w-lg border border-red-500/20 shadow-2xl relative overflow-hidden fade-in">
-                    <button onclick="closeModal()" class="absolute top-4 right-4 text-gray-400 hover:text-white transition-colors"><i class="fa-solid fa-times text-xl"></i></button>
-                    <div class="p-8">
-                        <div class="w-16 h-16 rounded-2xl bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-400 mb-5">
-                            <i class="fa-solid fa-ban text-2xl"></i>
-                        </div>
-                        <h3 class="text-2xl font-extrabold text-white mb-2">Cannot access</h3>
-                        <p class="text-sm text-gray-400 leading-relaxed">This content is stored behind the server access layer and is not available to the current session.</p>
-                    </div>
-                </div>
-            `, { shareRoute: true });
-        }
-
         async function handleShareRoute() {
             const route = parseShareRoute();
             const routeKey = route ? `${route.type}:${route.itemSlug}:${route.fileSlug || ''}` : '';
 
             if (!route) {
                 state.lastHandledShareRoute = '';
-                state.lastDeniedShareRoute = '';
                 const modal = document.getElementById('modal-container');
                 if (modal && !modal.classList.contains('hidden') && modal.dataset.shareRoute === 'true') {
                     window.closeModal(false);
@@ -214,26 +187,13 @@
             }
 
             if (state.isLoading) return;
-            if (routeKey === state.lastHandledShareRoute || routeKey === state.lastDeniedShareRoute) return;
+            if (routeKey === state.lastHandledShareRoute) return;
 
             let item = findItemByShareSlug(route.itemSlug);
             if (!item) {
-                const privateMatch = await fetchSensitiveSharedItem(route.itemSlug);
-                if (!privateMatch) return;
-
-                if (privateMatch.unauthorized) {
-                    state.lastDeniedShareRoute = routeKey;
-                    openCannotAccessModal();
-                    return;
-                }
-
-                if (!privateMatch.item) return;
-
-                item = upsertLoadedSensitiveItem(privateMatch.item);
-                render();
+                return;
             }
 
-            state.lastDeniedShareRoute = '';
             state.lastHandledShareRoute = routeKey;
 
             if (route.type === 'watch' && route.fileSlug) {
@@ -954,34 +914,6 @@
 
         function isBackendUploadRouteUnavailable(error) {
             return Number(error?.status || 0) === 405;
-        }
-
-        async function fetchSensitiveSharedItem(itemSlug) {
-            try {
-                const response = await fetch(buildSecurityBackendUrl(`/api/private/share/${encodeURIComponent(itemSlug)}`), {
-                    credentials: 'include'
-                });
-
-                let payload = null;
-                try {
-                    payload = await response.json();
-                } catch (error) {
-                    payload = null;
-                }
-
-                if (response.status === 401 || response.status === 403) {
-                    return { unauthorized: true };
-                }
-
-                if (!response.ok) {
-                    return null;
-                }
-
-                return { item: payload?.item || null };
-            } catch (error) {
-                console.error('Sensitive share lookup failed', error);
-                return null;
-            }
         }
 
         function getSecurityBackendReportUrl(scanId) {
