@@ -250,7 +250,7 @@
                 }
                 await init();
                 if (backendSessionUnavailable) {
-                    showToast('Backend admin routes are unavailable on this host. Public uploads can fall back to Gofile, but sensitive storage still requires the backend.', 'warning');
+                    showToast('Backend admin routes are unavailable on this host. Public uploads still work, and backend moderation data will appear whenever the backend is reachable again.', 'warning');
                 }
             } catch (error) {
                 console.error('Admin console bootstrap failed', error);
@@ -1470,7 +1470,7 @@
                             </div>
                             <div>
                                 <h2 class="text-2xl font-bold text-white">Direct Admin Deployment</h2>
-                                <p class="text-gray-500 text-xs">Deploy public content normally, or store sensitive content in the backend-only catalog with gated access.</p>
+                                <p class="text-gray-500 text-xs">Deploy content into the public catalog with backend scanning when available and automatic fallback when it is not.</p>
                             </div>
                         </div>
                         
@@ -1508,15 +1508,9 @@
                                 </div>
                                 <div class="group">
                                     <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Storage Mode</label>
-                                    <div class="bg-gray-950 border border-gray-800 rounded-2xl p-5 space-y-3 text-sm text-gray-300">
-                                        <label class="flex items-start gap-3 cursor-pointer">
-                                            <input type="radio" name="up-visibility" value="public" checked class="h-4 w-4 mt-1 text-blue-500">
-                                            <span><span class="font-bold text-white block">Public Catalog</span><span class="text-xs text-gray-500">Visible through the normal public app and Firestore catalog.</span></span>
-                                        </label>
-                                        <label class="flex items-start gap-3 cursor-pointer">
-                                            <input type="radio" name="up-visibility" value="sensitive" class="h-4 w-4 mt-1 text-red-500">
-                                            <span><span class="font-bold text-red-400 block">Sensitive / Server Only</span><span class="text-xs text-gray-500">Metadata stays on your backend and the file routes require backend access.</span></span>
-                                        </label>
+                                    <div class="bg-gray-950 border border-gray-800 rounded-2xl p-5 text-sm text-gray-300">
+                                        <span class="font-bold text-white block">Public Catalog</span>
+                                        <span class="text-xs text-gray-500">New uploads publish to the normal public catalog. The old backend-only storage path is disabled here.</span>
                                     </div>
                                 </div>
                             </div>
@@ -1559,7 +1553,7 @@
         window.handleInfiniteUpload = async (e) => {
             e.preventDefault();
             const sourceType = document.querySelector('input[name="up-source"]:checked')?.value || 'upload';
-            const visibility = document.querySelector('input[name="up-visibility"]:checked')?.value || 'public';
+            const visibility = 'public';
             const file = document.getElementById('up-file').files[0];
             const directUrl = document.getElementById('up-url').value.trim();
             const title = document.getElementById('up-title').value.trim();
