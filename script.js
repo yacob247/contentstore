@@ -1,5 +1,5 @@
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInAnonymously, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, deleteDoc, doc, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import {
             buildFileShareHash,
@@ -19,7 +19,6 @@
         let publicAdminItems = [];
         let sensitiveAdminItems = [];
         let adminInitPromise = null;
-        let authBootstrapPromise = null;
         let securityIncidents = [];
         const CATEGORY_INFO = {
             collection: { label: 'Collections (Mixed)', icon: 'fa-layer-group', color: 'text-purple-400' },
@@ -134,9 +133,17 @@
         }
 
         function showWorkspaceShell() {
-            document.getElementById('auth-overlay').classList.add('hidden');
-            document.getElementById('workspace').classList.remove('hidden');
-            document.getElementById('workspace').classList.add('flex');
+            const overlay = document.getElementById('auth-overlay');
+            const workspace = document.getElementById('workspace');
+
+            if (overlay) {
+                overlay.classList.add('hidden');
+            }
+
+            if (workspace) {
+                workspace.classList.remove('hidden');
+                workspace.classList.add('flex');
+            }
         }
 
         function showWorkspaceLoading(message = 'Connecting to secure backend...') {
@@ -146,6 +153,29 @@
                     <i class="fa-solid fa-circle-notch fa-spin text-4xl text-blue-500 mb-4"></i>
                     <p class="text-gray-400 font-medium">${escapeHtml(message)}</p>
                 </div>`;
+        }
+
+        function renderAdminBootstrapError(message) {
+            showWorkspaceShell();
+            document.getElementById('main-content').innerHTML = `
+                <div class="glass-card max-w-3xl mx-auto rounded-[2.5rem] p-10 text-center border border-red-500/20 shadow-2xl fade-in">
+                    <div class="w-20 h-20 mx-auto mb-6 rounded-full border border-red-500/20 bg-red-500/10 flex items-center justify-center">
+                        <i class="fa-solid fa-shield-halved text-4xl text-red-400"></i>
+                    </div>
+                    <p class="text-[11px] uppercase tracking-[0.35em] text-red-300/70 font-bold mb-4">Admin Console</p>
+                    <h1 class="text-4xl font-extrabold tracking-tight mb-3">Console Not Ready</h1>
+                    <p class="text-slate-400 leading-relaxed max-w-2xl mx-auto">${escapeHtml(message)}</p>
+                </div>`;
+        }
+
+        async function ensureAdminBootstrapAuth() {
+            ensureFirebaseClients();
+            if (auth?.currentUser) {
+                return auth.currentUser;
+            }
+
+            await signInAnonymously(auth);
+            return auth.currentUser;
         }
 
         async function getAdminRequestHeaders(includeJson = false) {
@@ -199,55 +229,19 @@
             return payload;
         }
 
-        async function restoreAdminSession() {
+        async function bootstrapAdminConsole() {
             try {
-                ensureFirebaseClients();
-                if (!authBootstrapPromise) {
-                    authBootstrapPromise = new Promise((resolve) => {
-                        const unsubscribe = onAuthStateChanged(auth, (user) => {
-                            unsubscribe();
-                            resolve(user);
-                        });
-                    });
-                }
-
-                const user = await authBootstrapPromise;
-                if (!user || user.isAnonymous) return;
+                showWorkspaceLoading('Opening admin console...');
+                await ensureAdminBootstrapAuth();
                 await assertAdminAccess();
-                showWorkspaceLoading('Restoring secure operator session...');
                 await init();
             } catch (error) {
-                console.error('Admin session restore failed', error);
+                console.error('Admin console bootstrap failed', error);
+                renderAdminBootstrapError('The console could not finish loading. If you want Cloudflare IP-only access, clear ADMIN_DASHBOARD_PASSWORD and SECURITY_ADMIN_TOKEN on the live backend, then reload this page.');
             }
         }
 
         // --- Initialization ---
-        window.unlockAdmin = async (e) => {
-            e.preventDefault();
-
-            const form = e.currentTarget;
-            const button = form?.querySelector('button[type="submit"]');
-            const email = document.getElementById('admin-email').value.trim();
-            const password = document.getElementById('admin-key').value;
-
-            if (button) button.disabled = true;
-
-            try {
-                ensureFirebaseClients();
-                await signInWithEmailAndPassword(auth, email, password);
-                await assertAdminAccess();
-                showWorkspaceLoading('Validating secure access...');
-                await init();
-            } catch (error) {
-                if (auth?.currentUser) {
-                    await signOut(auth).catch(() => {});
-                }
-                showToast(error.message || 'Cannot access.', 'error');
-            } finally {
-                if (button) button.disabled = false;
-            }
-        };
-
         window.lockConsole = async () => {
             try {
                 ensureFirebaseClients();
@@ -269,8 +263,8 @@
 
             adminInitPromise = (async () => {
                 ensureFirebaseClients();
-                if (!auth?.currentUser || auth.currentUser.isAnonymous) {
-                    throw new Error('Cannot access.');
+                if (!auth?.currentUser) {
+                    throw new Error('Could not start the admin session.');
                 }
 
                 const q = collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items');
@@ -1663,4 +1657,4 @@
 
 
         window.abortOperation = () => location.reload();
-        restoreAdminSession();
+        bootstrapAdminConsole();
