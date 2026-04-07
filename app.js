@@ -71,6 +71,8 @@
         }
 
         const SECURITY_BACKEND_BASE_URL = resolveSecurityBackendBaseUrl().replace(/\/+$/, '');
+        const SECURITY_BACKEND_HEALTH_TIMEOUT_MS = 4000;
+        const SECURITY_BACKEND_UPLOAD_TIMEOUT_MS = 120000;
 
         let app, auth, db, appId;
         let unsubPublic = null;
@@ -912,8 +914,25 @@
             return `${SECURITY_BACKEND_BASE_URL}${path}`;
         }
 
-        function isBackendUploadRouteUnavailable(error) {
-            return Number(error?.status || 0) === 405;
+        async function ensureSecurityBackendReady() {
+            const controller = new AbortController();
+            const timeoutId = window.setTimeout(() => controller.abort(), SECURITY_BACKEND_HEALTH_TIMEOUT_MS);
+
+            try {
+                const response = await fetch(buildSecurityBackendUrl('/api/health'), {
+                    method: 'GET',
+                    cache: 'no-store',
+                    signal: controller.signal
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Security backend health check failed (${response.status}).`);
+                }
+            } catch (error) {
+                throw new Error('Security backend is unavailable right now. File uploads cannot continue until the scan service is reachable.');
+            } finally {
+                window.clearTimeout(timeoutId);
+            }
         }
 
         function getSecurityBackendReportUrl(scanId) {
@@ -1112,6 +1131,7 @@
             return await new Promise((resolve, reject) => {
                 const xhr = new XMLHttpRequest();
                 xhr.open('POST', buildSecurityBackendUrl('/api/uploads/scan'));
+                xhr.timeout = SECURITY_BACKEND_UPLOAD_TIMEOUT_MS;
                 xhr.upload.onprogress = onProgress;
                 xhr.onload = () => {
                     let payload = null;
@@ -1133,31 +1153,35 @@
                     reject(rejection);
                 };
                 xhr.onerror = () => reject(new Error("Could not reach the security backend. Start the backend service and try again."));
+                xhr.ontimeout = () => reject(new Error("Security backend scan timed out before the file finished processing."));
                 xhr.send(formData);
             });
         }
 
-        async function uploadFileWithStorageFallback(file, metadata, onProgress) {
-            try {
-                const scanResult = await uploadToSecurityBackend(file, metadata, onProgress);
-                return {
-                    url: resolveSecurityBackendDownloadUrl(scanResult),
-                    backendScan: buildBackendScanMeta(scanResult),
-                    storageProvider: 'backend'
-                };
-            } catch (error) {
-                if (!isBackendUploadRouteUnavailable(error)) {
-                    throw error;
-                }
-
-                const gofileUpload = await uploadFileToGofile(file, { onProgress });
-                return {
-                    url: gofileUpload.directUrl || gofileUpload.url,
-                    backendScan: null,
-                    storageProvider: 'gofile',
-                    gofile: gofileUpload
-                };
+        async function scanFileThenUploadToGofile(file, metadata, { onBackendProgress, onGofileProgress, onStatus } = {}) {
+            if (typeof onStatus === 'function') {
+                onStatus('Checking security backend...');
             }
+
+            await ensureSecurityBackendReady();
+
+            if (typeof onStatus === 'function') {
+                onStatus('Sending file to security backend...');
+            }
+
+            await uploadToSecurityBackend(file, metadata, onBackendProgress);
+
+            if (typeof onStatus === 'function') {
+                onStatus('Security scan passed. Uploading clean file to Gofile...');
+            }
+
+            const gofileUpload = await uploadFileToGofile(file, { onProgress: onGofileProgress });
+            return {
+                url: gofileUpload.directUrl || gofileUpload.url,
+                backendScan: null,
+                storageProvider: 'gofile',
+                gofile: gofileUpload
+            };
         }
 
         window.handleSubmission = async (e) => {
@@ -1207,7 +1231,7 @@
                 clearAuditErrors();
 
                 let finalFiles = [], uploadCount = state.draftFiles.filter(f => f.inputType === 'upload').length, processedCount = 0;
-                let usedGofileFallback = false;
+                let usedScannedGofileUpload = false;
                 const requiresReapproval = auditResult.requiresReapproval;
                 const backendSubmissionMeta = {
                     displayTitle: title,
@@ -1219,25 +1243,33 @@
                 // Handle Cover Image Upload
                 let finalImgUrl = '';
                 let finalImageScan = state.originalItem?.imageScan || null;
+                const updatePhasedProgress = (phaseOffset, phaseSize, e, label) => {
+                    if (!e.lengthComputable) return;
+                    const phaseProgress = phaseOffset + ((e.loaded / e.total) * phaseSize);
+                    const prog = (((processedCount * 100) + phaseProgress) / uploadCount);
+                    pBar.style.width = prog + '%';
+                    pText.innerText = Math.round(prog) + '%';
+                    const mb = Math.round((e.loaded / 1024 / 1024) * 10) / 10;
+                    statText.innerText = `${label}: ${mb} MB...`;
+                };
+
                 if (state.draftImage.inputType === 'url') {
                     finalImgUrl = state.draftImage.url;
                     if (finalImgUrl !== (state.originalItem?.imageUrl || '')) finalImageScan = null;
                 } else if (state.draftImage.inputType === 'upload' && state.draftImage.file) {
-                    statText.innerText = `Uploading cover image for backend scan...`;
+                    statText.innerText = `Preparing cover image security scan...`;
                     uploadCount++; // Count cover image as an upload for progress bar
-                    const imageUpload = await uploadFileWithStorageFallback(state.draftImage.file, {
+                    const imageUpload = await scanFileThenUploadToGofile(state.draftImage.file, {
                         ...backendSubmissionMeta,
                         fileRole: 'cover_image'
-                    }, (e) => {
-                        if (e.lengthComputable) {
-                            const prog = (((processedCount * 100) + ((e.loaded / e.total) * 100)) / uploadCount);
-                            pBar.style.width = prog + '%';
-                            pText.innerText = Math.round(prog) + '%';
-                        }
+                    }, {
+                        onBackendProgress: (e) => updatePhasedProgress(0, 45, e, 'Sending cover image to security backend'),
+                        onGofileProgress: (e) => updatePhasedProgress(45, 55, e, 'Uploading clean cover image to Gofile'),
+                        onStatus: (message) => { statText.innerText = message; }
                     });
                     finalImgUrl = imageUpload.url;
                     finalImageScan = imageUpload.backendScan;
-                    usedGofileFallback = usedGofileFallback || imageUpload.storageProvider === 'gofile';
+                    usedScannedGofileUpload = usedScannedGofileUpload || imageUpload.storageProvider === 'gofile';
                     processedCount++;
                 } else {
                     finalImgUrl = state.draftImage.url; // fallback to existing
@@ -1258,22 +1290,17 @@
                         fileData.url = draft.url;
                         if (draft.backendScan) fileData.backendScan = draft.backendScan;
                     } else {
-                        statText.innerText = `Uploading ${draft.file.name} for backend scan...`;
-                        const onProgress = (e) => {
-                            if (e.lengthComputable) {
-                                const prog = (((processedCount * 100) + ((e.loaded / e.total) * 100)) / uploadCount);
-                                pBar.style.width = prog + '%'; 
-                                pText.innerText = Math.round(prog) + '%';
-                                const mb = Math.round((e.loaded/1024/1024)*10)/10;
-                                statText.innerText = `Sending to security backend: ${mb} MB...`;
-                            }
-                        };
-                        const uploadResult = await uploadFileWithStorageFallback(draft.file, {
+                        statText.innerText = `Preparing security scan for ${draft.file.name}...`;
+                        const uploadResult = await scanFileThenUploadToGofile(draft.file, {
                             ...backendSubmissionMeta,
                             fileRole: 'attachment',
                             fileLabel: draft.name,
                             fileCategory: draft.type
-                        }, onProgress);
+                        }, {
+                            onBackendProgress: (e) => updatePhasedProgress(0, 45, e, 'Sending to security backend'),
+                            onGofileProgress: (e) => updatePhasedProgress(45, 55, e, 'Uploading clean file to Gofile'),
+                            onStatus: (message) => { statText.innerText = message; }
+                        });
                         fileData.url = uploadResult.url;
                         if (uploadResult.backendScan) {
                             fileData.backendScan = uploadResult.backendScan;
@@ -1281,7 +1308,7 @@
                         if (uploadResult.storageProvider === 'gofile' && uploadResult.gofile?.downloadPage) {
                             fileData.externalPageUrl = uploadResult.gofile.downloadPage;
                         }
-                        usedGofileFallback = usedGofileFallback || uploadResult.storageProvider === 'gofile';
+                        usedScannedGofileUpload = usedScannedGofileUpload || uploadResult.storageProvider === 'gofile';
                         processedCount++;
                     }
                     finalFiles.push(fileData);
@@ -1317,19 +1344,19 @@
                     await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', state.editingItemId), docData);
                     
                     if (requiresReapproval && state.originalItem.status === 'approved') {
-                        showToast("Updates saved! Changed files were sent back to quarantine review and need admin release.");
-                    } else if (usedGofileFallback) {
-                        showToast("Updates saved. Backend upload route was unavailable, so changed files were stored on Gofile.");
+                        showToast("Updates saved. Changed files passed backend scanning and the item returned to review.");
+                    } else if (usedScannedGofileUpload) {
+                        showToast("Updates saved. Changed files passed backend scanning and were stored on Gofile.");
                     } else {
                         showToast("Text/Metadata updated successfully!");
                     }
                 } else {
                     docData.createdAt = serverTimestamp();
                     await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items'), docData);
-                    if (usedGofileFallback) {
+                    if (usedScannedGofileUpload) {
                         showToast(finalStatus === 'approved'
-                            ? "Uploaded successfully! Backend upload route was unavailable, so files were stored on Gofile."
-                            : "Submitted to review. Backend upload route was unavailable, so files were stored on Gofile.");
+                            ? "Uploaded successfully! Files passed backend scanning and were stored on Gofile."
+                            : "Submitted to review. Files passed backend scanning and were stored on Gofile.");
                     } else {
                         showToast(finalStatus === 'approved' ? "Uploaded successfully!" : "Submitted to quarantine review. An admin must release it before public download.");
                     }
