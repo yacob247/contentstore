@@ -15,7 +15,10 @@
         } from "./content-link-utils.js";
 
         let db, auth, currentTab = 'dashboard';
-        let adminItems = []; // Store fetched items
+        let adminItems = [];
+        let publicAdminItems = [];
+        let sensitiveAdminItems = [];
+        let adminInitPromise = null;
         let securityIncidents = [];
         const CATEGORY_INFO = {
             collection: { label: 'Collections (Mixed)', icon: 'fa-layer-group', color: 'text-purple-400' },
@@ -28,7 +31,19 @@
             other: { label: 'Misc / Other', icon: 'fa-file-lines', color: 'text-gray-400' }
         };
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'infinite-nexus-v1';
-        const SECURITY_BACKEND_BASE_URL = (typeof __security_backend_url !== 'undefined' ? __security_backend_url : 'http://127.0.0.1:8787').replace(/\/+$/, '');
+        function resolveSecurityBackendBaseUrl() {
+            if (typeof __security_backend_url !== 'undefined' && __security_backend_url) {
+                return __security_backend_url;
+            }
+
+            if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
+                return `${window.location.protocol}//${window.location.hostname}:8787`;
+            }
+
+            return 'http://127.0.0.1:8787';
+        }
+
+        const SECURITY_BACKEND_BASE_URL = resolveSecurityBackendBaseUrl().replace(/\/+$/, '');
         const SECURITY_ADMIN_TOKEN = typeof __security_admin_token !== 'undefined' ? __security_admin_token : '';
 
         const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
@@ -70,65 +85,147 @@
             setTimeout(() => { modal.classList.add('hidden'); modal.innerHTML = ''; }, 300);
         };
 
+        function normalizeAdminItemRecord(rawItem, origin = 'firestore') {
+            return {
+                ...rawItem,
+                category: normalizeCategory(rawItem.category),
+                visibility: rawItem.visibility === 'sensitive' || origin === 'backend_sensitive' ? 'sensitive' : 'public',
+                storageOrigin: origin,
+                files: (rawItem.files || []).map(file => ({
+                    ...file,
+                    type: normalizeCategory(file.type || rawItem.category)
+                }))
+            };
+        }
+
+        function getSortableTimestampValue(value) {
+            if (!value) return 0;
+            if (typeof value?.toMillis === 'function') return value.toMillis();
+            const parsed = Date.parse(value);
+            return Number.isNaN(parsed) ? 0 : parsed;
+        }
+
+        function isSensitiveItem(item) {
+            return item?.visibility === 'sensitive' || item?.storageOrigin === 'backend_sensitive';
+        }
+
+        function syncAdminItems() {
+            adminItems = [...publicAdminItems, ...sensitiveAdminItems];
+            if (currentTab === 'dashboard') renderDashboard();
+        }
+
+        function showWorkspaceShell() {
+            document.getElementById('auth-overlay').classList.add('hidden');
+            document.getElementById('workspace').classList.remove('hidden');
+            document.getElementById('workspace').classList.add('flex');
+        }
+
+        function showWorkspaceLoading(message = 'Connecting to secure backend...') {
+            showWorkspaceShell();
+            document.getElementById('main-content').innerHTML = `
+                <div class="flex justify-center items-center h-64 flex-col fade-in">
+                    <i class="fa-solid fa-circle-notch fa-spin text-4xl text-blue-500 mb-4"></i>
+                    <p class="text-gray-400 font-medium">${escapeHtml(message)}</p>
+                </div>`;
+        }
+
+        async function requestAdminSession(path, method, body) {
+            const response = await fetch(buildSecurityBackendUrl(path), {
+                method,
+                credentials: 'include',
+                headers: body ? { 'Content-Type': 'application/json' } : undefined,
+                body: body ? JSON.stringify(body) : undefined
+            });
+
+            let payload = null;
+            try {
+                payload = await response.json();
+            } catch (error) {
+                payload = null;
+            }
+
+            if (!response.ok) {
+                throw new Error(payload?.error || 'Cannot access.');
+            }
+
+            return payload;
+        }
+
+        async function restoreAdminSession() {
+            try {
+                const payload = await requestAdminSession('/api/admin/session', 'GET');
+                if (!payload?.authenticated) return;
+                showWorkspaceLoading('Restoring secure operator session...');
+                await init();
+            } catch (error) {
+                console.error('Admin session restore failed', error);
+            }
+        }
+
         // --- Initialization ---
         window.unlockAdmin = async (e) => {
             e.preventDefault();
-            if (document.getElementById('admin-key').value === 'password123') {
-                document.getElementById('auth-overlay').classList.add('hidden');
-                document.getElementById('workspace').classList.remove('hidden');
-                document.getElementById('workspace').classList.add('flex');
-                
-                document.getElementById('main-content').innerHTML = `
-                    <div class="flex justify-center items-center h-64 flex-col fade-in">
-                        <i class="fa-solid fa-circle-notch fa-spin text-4xl text-blue-500 mb-4"></i>
-                        <p class="text-gray-400 font-medium">Connecting to Database Cluster...</p>
-                    </div>`;
 
-                try { await init(); } 
-                catch(err) {
-                    console.error("Initialization error", err);
-                    document.getElementById('main-content').innerHTML = `
-                        <div class="flex justify-center items-center h-64 flex-col text-center fade-in">
-                            <i class="fa-solid fa-triangle-exclamation text-4xl text-red-500 mb-4"></i>
-                            <p class="text-white font-bold text-xl">Database Connection Failed</p>
-                            <p class="text-gray-400 text-sm mt-2 max-w-md">${err.message}</p>
-                            <button onclick="location.reload()" class="mt-6 px-6 py-2 bg-gray-800 rounded-xl hover:bg-gray-700 transition">Retry Connection</button>
-                        </div>`;
-                }
-            } else { 
-                showToast("Key Denied. Incorrect administration password.", "error"); 
+            const form = e.currentTarget;
+            const button = form?.querySelector('button[type="submit"]');
+            const password = document.getElementById('admin-key').value;
+
+            if (button) button.disabled = true;
+
+            try {
+                await requestAdminSession('/api/admin/session', 'POST', { password });
+                showWorkspaceLoading('Validating secure access...');
+                await init();
+            } catch (error) {
+                showToast(error.message || 'Cannot access.', 'error');
+            } finally {
+                if (button) button.disabled = false;
             }
         };
 
+        window.lockConsole = async () => {
+            try {
+                await requestAdminSession('/api/admin/session', 'DELETE');
+            } catch (error) {
+                console.error('Admin session clear failed', error);
+            }
+
+            location.reload();
+        };
+
         async function init() {
-            const app = initializeApp(firebaseConfig);
-            auth = getAuth(app);
-            db = getFirestore(app);
+            if (adminInitPromise) {
+                await adminInitPromise;
+                return;
+            }
 
-            await signInAnonymously(auth);
-            
-            // Setup listener for all documents
-            const q = collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items');
-            onSnapshot(q, snap => {
-                adminItems = snap.docs.map(d => {
-                    const rawItem = { id: d.id, ...d.data() };
-                    return {
-                        ...rawItem,
-                        category: normalizeCategory(rawItem.category),
-                        files: (rawItem.files || []).map(file => ({
-                            ...file,
-                            type: normalizeCategory(file.type || rawItem.category)
-                        }))
-                    };
+            adminInitPromise = (async () => {
+                const app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+
+                await signInAnonymously(auth);
+
+                const q = collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items');
+                onSnapshot(q, snap => {
+                    publicAdminItems = snap.docs.map(d => normalizeAdminItemRecord({ id: d.id, ...d.data() }, 'firestore'));
+                    syncAdminItems();
+                }, err => {
+                    console.error(err);
+                    showToast("Failed to sync realtime data.", "error");
                 });
-                if(currentTab === 'dashboard') renderDashboard();
-            }, err => {
-                console.error(err);
-                showToast("Failed to sync realtime data.", "error");
-            });
 
-            await refreshSecurityIncidents();
-            setTab('dashboard');
+                await refreshSensitiveItems();
+                await refreshSecurityIncidents();
+                setTab('dashboard');
+            })();
+
+            try {
+                await adminInitPromise;
+            } catch (error) {
+                adminInitPromise = null;
+                throw error;
+            }
         }
 
         window.setTab = (tab) => {
@@ -332,6 +429,7 @@
 
             const response = await fetch(buildSecurityBackendUrl(path), {
                 method,
+                credentials: 'include',
                 headers,
                 body: body ? JSON.stringify(body) : undefined
             });
@@ -348,6 +446,32 @@
             }
 
             return payload;
+        }
+
+        async function refreshSensitiveItems() {
+            try {
+                const payload = await callSecurityBackend('/api/private/items', 'GET');
+                sensitiveAdminItems = (payload?.items || []).map(item => normalizeAdminItemRecord(item, 'backend_sensitive'));
+                syncAdminItems();
+            } catch (error) {
+                console.error('Failed to load sensitive items', error);
+                sensitiveAdminItems = [];
+                syncAdminItems();
+            }
+        }
+
+        async function createSensitiveBackendItem(payload) {
+            const response = await callSecurityBackend('/api/private/items', 'POST', payload);
+            return normalizeAdminItemRecord(response?.item || {}, 'backend_sensitive');
+        }
+
+        async function updateSensitiveBackendItem(itemId, payload) {
+            const response = await callSecurityBackend(`/api/private/items/${itemId}`, 'PUT', payload);
+            return normalizeAdminItemRecord(response?.item || {}, 'backend_sensitive');
+        }
+
+        async function deleteSensitiveBackendItem(itemId) {
+            return callSecurityBackend(`/api/private/items/${itemId}`, 'DELETE');
         }
 
         async function refreshSecurityIncidents() {
@@ -414,6 +538,10 @@
             return await new Promise((resolve, reject) => {
                 const xhr = new XMLHttpRequest();
                 xhr.open('POST', buildSecurityBackendUrl('/api/uploads/scan'));
+                xhr.withCredentials = true;
+                if (SECURITY_ADMIN_TOKEN) {
+                    xhr.setRequestHeader('x-security-admin-token', SECURITY_ADMIN_TOKEN);
+                }
 
                 xhr.upload.onprogress = (e) => {
                     if (e.lengthComputable) {
@@ -473,7 +601,12 @@
 
                 if (status === 'approved') {
                     const releasedCount = await releaseItemSecurityAssets(item);
-                    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id), { status });
+                    if (isSensitiveItem(item)) {
+                        await updateSensitiveBackendItem(id, { status });
+                        await refreshSensitiveItems();
+                    } else {
+                        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id), { status });
+                    }
                     await refreshSecurityIncidents();
                     showToast(releasedCount > 0 ? `Stream approved and ${releasedCount} quarantined asset(s) released.` : "Stream marked as approved.", 'success');
                     return;
@@ -481,13 +614,23 @@
 
                 if (status === 'rejected') {
                     const rejectedCount = await rejectItemSecurityAssets(item);
-                    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id), { status });
+                    if (isSensitiveItem(item)) {
+                        await updateSensitiveBackendItem(id, { status });
+                        await refreshSensitiveItems();
+                    } else {
+                        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id), { status });
+                    }
                     await refreshSecurityIncidents();
                     showToast(rejectedCount > 0 ? `Stream rejected and ${rejectedCount} quarantined asset(s) were rejected in the backend.` : "Stream marked as rejected.", 'warning');
                     return;
                 }
 
-                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id), { status });
+                if (isSensitiveItem(item)) {
+                    await updateSensitiveBackendItem(id, { status });
+                    await refreshSensitiveItems();
+                } else {
+                    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id), { status });
+                }
                 showToast(`Stream marked as ${status}.`, status === 'approved' ? 'success' : 'warning');
             } catch (e) { showToast(e.message || "Error updating status.", "error"); }
         };
@@ -495,7 +638,15 @@
         window.removeItem = async (id) => {
             if(confirm("Permanently purge this asset from the Hub? It will be deleted for everyone.")) {
                 try {
-                    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id));
+                    const item = getItemById(id);
+                    if (!item) throw new Error("Item not found.");
+
+                    if (isSensitiveItem(item)) {
+                        await deleteSensitiveBackendItem(id);
+                        await refreshSensitiveItems();
+                    } else {
+                        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id));
+                    }
                     showToast("Asset purged successfully.");
                 } catch(e) { showToast("Failed to delete.", "error"); }
             }
@@ -511,6 +662,7 @@
                 createdAt: undefined,
                 updatedAt: undefined,
                 category: normalizeCategory(item.category),
+                visibility: isSensitiveItem(item) ? 'sensitive' : 'public',
                 shareSlug: getItemShareSlug(item),
                 files: (item.files || []).map((file, index) => ({
                     ...file,
@@ -562,6 +714,16 @@
                                             <option value="pending" ${item.status === 'pending' ? 'selected' : ''}>Pending</option>
                                             <option value="rejected" ${item.status === 'rejected' ? 'selected' : ''}>Rejected</option>
                                         </select>
+                                    </div>
+
+                                    <div class="group md:col-span-2">
+                                        <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Storage Mode</label>
+                                        <div class="w-full bg-gray-950 border border-gray-800 rounded-2xl p-4 text-sm text-gray-300">
+                                            ${isSensitiveItem(item)
+                                                ? '<span class="text-red-400 font-bold"><i class="fa-solid fa-user-shield mr-2"></i>Sensitive / Server Only</span><p class="text-xs text-gray-500 mt-2">This item is stored in the backend-only catalog and only resolves through the backend access layer.</p>'
+                                                : '<span class="text-blue-400 font-bold"><i class="fa-solid fa-globe mr-2"></i>Public / Firestore</span><p class="text-xs text-gray-500 mt-2">This item is published through the public Firestore catalog and standard public routes.</p>'
+                                            }
+                                        </div>
                                     </div>
                                 </div>
 
@@ -724,16 +886,26 @@
                     }
                 }
 
-                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id), {
+                const payload = {
                     title,
                     description,
                     category,
                     status,
                     shareSlug,
                     imageUrl,
-                    files: updatedFiles,
-                    updatedAt: serverTimestamp()
-                });
+                    visibility: isSensitiveItem(item) ? 'sensitive' : 'public',
+                    files: updatedFiles
+                };
+
+                if (isSensitiveItem(item)) {
+                    await updateSensitiveBackendItem(id, payload);
+                    await refreshSensitiveItems();
+                } else {
+                    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id), {
+                        ...payload,
+                        updatedAt: serverTimestamp()
+                    });
+                }
                 if (item.status !== status) {
                     await refreshSecurityIncidents();
                 }
@@ -767,6 +939,7 @@
                     description: parsed.description ?? item.description ?? '',
                     category: rawCategory,
                     status: parsed.status ?? item.status ?? 'approved',
+                    visibility: isSensitiveItem(item) ? 'sensitive' : 'public',
                     shareSlug: sanitizeShareSlug(parsed.shareSlug || getItemShareSlug(item), 'item'),
                     imageUrl: parsed.imageUrl ?? item.imageUrl ?? '',
                     imageScan: parsed.imageScan ?? item.imageScan ?? null,
@@ -780,8 +953,7 @@
                             type: normalizeCategory(file?.type || rawCategory),
                             shareSlug: sanitizeShareSlug(file?.shareSlug || getFileShareSlug(item, file, index), 'file')
                         }))
-                        : (item.files || []),
-                    updatedAt: serverTimestamp()
+                        : (item.files || [])
                 };
 
                 if (item.status !== payload.status) {
@@ -792,7 +964,15 @@
                     }
                 }
 
-                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id), payload);
+                if (isSensitiveItem(item)) {
+                    await updateSensitiveBackendItem(id, payload);
+                    await refreshSensitiveItems();
+                } else {
+                    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'content_hub_items', id), {
+                        ...payload,
+                        updatedAt: serverTimestamp()
+                    });
+                }
                 if (item.status !== payload.status) {
                     await refreshSecurityIncidents();
                 }
@@ -1012,11 +1192,21 @@
                 </div>
             `).join('');
             
-            const rows = adminItems.sort((a,b) => (b.createdAt?.toMillis() || 0) - (a.createdAt?.toMillis() || 0)).map(i => {
+            const rows = adminItems
+            .slice()
+            .sort((a, b) => {
+                const left = getSortableTimestampValue(a.updatedAt) || getSortableTimestampValue(a.createdAt);
+                const right = getSortableTimestampValue(b.updatedAt) || getSortableTimestampValue(b.createdAt);
+                return right - left;
+            })
+            .map(i => {
                 const isPending = i.status === 'pending';
                 const isApproved = i.status === 'approved';
                 const catInfo = getCategoryInfo(i.category);
                 const primaryVideo = getPrimaryEmbeddableVideo(i);
+                const storageBadge = isSensitiveItem(i)
+                    ? `<p class="text-[10px] text-red-400 mt-1 uppercase tracking-wider"><i class="fa-solid fa-user-shield mr-1"></i>server-only sensitive item</p>`
+                    : `<p class="text-[10px] text-blue-400 mt-1 uppercase tracking-wider"><i class="fa-solid fa-globe mr-1"></i>public catalog item</p>`;
                 const statusBadge = isPending 
                     ? `<span class="px-3 py-1 text-xs rounded-full font-bold uppercase bg-yellow-500/10 text-yellow-500 border border-yellow-500/20"><i class="fa-solid fa-clock mr-1"></i> Pending</span>`
                     : isApproved
@@ -1033,6 +1223,7 @@
                             <div>
                                 <h3 class="font-bold text-white text-sm truncate max-w-[250px]" title="${i.title.replace(/"/g, '&quot;')}">${i.title}</h3>
                                 <p class="text-[10px] text-gray-500 uppercase tracking-wider">${catInfo.label}</p>
+                                ${storageBadge}
                                 <p class="text-[10px] text-blue-400 mt-1 break-all">${escapeHtml(getItemShareSlug(i))}</p>
                                 ${collectBackendScanIds(i).length > 0 ? `<p class="text-[10px] text-amber-400 mt-1 uppercase tracking-wider"><i class="fa-solid fa-file-shield mr-1"></i>${collectBackendScanIds(i).length} backend-scanned asset(s)</p>` : ''}
                             </div>
@@ -1144,7 +1335,7 @@
                             </div>
                             <div>
                                 <h2 class="text-2xl font-bold text-white">Direct Admin Deployment</h2>
-                                <p class="text-gray-500 text-xs">Deploy scanned binaries or approved video/link sources with custom public routes</p>
+                                <p class="text-gray-500 text-xs">Deploy public content normally, or store sensitive content in the backend-only catalog with gated access.</p>
                             </div>
                         </div>
                         
@@ -1164,7 +1355,7 @@
                                 <input type="url" id="up-img" class="w-full bg-gray-950 border border-gray-800 rounded-2xl p-5 text-white focus:border-blue-500 outline-none transition" placeholder="Paste an image URL for the cover art...">
                             </div>
 
-                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
                                 <div class="group">
                                     <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Category</label>
                                     <select id="up-cat" class="w-full bg-gray-950 border border-gray-800 rounded-2xl p-5 text-white outline-none focus:border-blue-500">
@@ -1178,6 +1369,19 @@
                                     <div class="bg-gray-950 border border-gray-800 rounded-2xl p-5 flex flex-wrap gap-6 text-sm text-gray-300">
                                         <label class="flex items-center gap-2 cursor-pointer"><input type="radio" name="up-source" value="upload" checked onchange="toggleAdminUploadSource(this.value)" class="h-4 w-4 text-blue-500"> Backend Scanned File</label>
                                         <label class="flex items-center gap-2 cursor-pointer"><input type="radio" name="up-source" value="url" onchange="toggleAdminUploadSource(this.value)" class="h-4 w-4 text-blue-500"> Direct URL / YouTube</label>
+                                    </div>
+                                </div>
+                                <div class="group">
+                                    <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 ml-1">Storage Mode</label>
+                                    <div class="bg-gray-950 border border-gray-800 rounded-2xl p-5 space-y-3 text-sm text-gray-300">
+                                        <label class="flex items-start gap-3 cursor-pointer">
+                                            <input type="radio" name="up-visibility" value="public" checked class="h-4 w-4 mt-1 text-blue-500">
+                                            <span><span class="font-bold text-white block">Public Catalog</span><span class="text-xs text-gray-500">Visible through the normal public app and Firestore catalog.</span></span>
+                                        </label>
+                                        <label class="flex items-start gap-3 cursor-pointer">
+                                            <input type="radio" name="up-visibility" value="sensitive" class="h-4 w-4 mt-1 text-red-500">
+                                            <span><span class="font-bold text-red-400 block">Sensitive / Server Only</span><span class="text-xs text-gray-500">Metadata stays on your backend and the file routes require backend access.</span></span>
+                                        </label>
                                     </div>
                                 </div>
                             </div>
@@ -1220,6 +1424,7 @@
         window.handleInfiniteUpload = async (e) => {
             e.preventDefault();
             const sourceType = document.querySelector('input[name="up-source"]:checked')?.value || 'upload';
+            const visibility = document.querySelector('input[name="up-visibility"]:checked')?.value || 'public';
             const file = document.getElementById('up-file').files[0];
             const directUrl = document.getElementById('up-url').value.trim();
             const title = document.getElementById('up-title').value.trim();
@@ -1237,6 +1442,11 @@
 
             if (sourceType === 'url' && !directUrl) {
                 showToast("Paste the direct URL or YouTube link first.", "error");
+                return;
+            }
+
+            if (visibility === 'sensitive' && sourceType === 'url' && !getEmbeddableVideoMeta(directUrl)) {
+                showToast("Sensitive direct links should be backend uploads or YouTube embeds.", "error");
                 return;
             }
 
@@ -1263,17 +1473,17 @@
 
             try {
                 if (sourceType === 'url') {
-                    updateStatus(20, "Publishing admin-controlled direct URL...");
+                    updateStatus(20, visibility === 'sensitive' ? "Saving sensitive metadata to backend..." : "Publishing admin-controlled direct URL...");
 
-                    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items'), {
+                    const itemPayload = {
                         title,
                         description: desc,
                         category: cat,
                         shareSlug: itemShareSlug,
                         imageUrl: img,
                         status: 'approved',
+                        visibility,
                         submitterEmail: 'Admin',
-                        createdAt: serverTimestamp(),
                         files: [{
                             name: resolvedFileLabel,
                             url: directUrl,
@@ -1281,10 +1491,22 @@
                             shareSlug: fileShareSlug,
                             uploadedAt: new Date().toISOString()
                         }]
-                    });
+                    };
 
-                    updateStatus(100, "Direct link published.");
-                    showToast("Admin link deployed with its own public routes.");
+                    if (visibility === 'sensitive') {
+                        await createSensitiveBackendItem(itemPayload);
+                        await refreshSensitiveItems();
+                    } else {
+                        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items'), {
+                            ...itemPayload,
+                            createdAt: serverTimestamp()
+                        });
+                    }
+
+                    updateStatus(100, visibility === 'sensitive' ? "Sensitive item stored on backend." : "Direct link published.");
+                    showToast(visibility === 'sensitive'
+                        ? "Sensitive item stored in backend-only catalog."
+                        : "Admin link deployed with its own public routes.");
                     setTimeout(() => {
                         overlay.classList.add('hidden');
                         setTab('dashboard');
@@ -1296,6 +1518,7 @@
                 const scanPayload = await uploadToSecurityBackend(file, {
                     displayTitle: title,
                     category: cat,
+                    visibility,
                     uploaderId: 'admin',
                     uploaderEmail: 'Admin',
                     fileRole: 'admin_deployment',
@@ -1310,15 +1533,15 @@
                 updateStatus(95, "Syncing metadata with Database...");
 
                 // Add document to completely free tier of Firestore Text Database
-                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items'), {
-                    title, 
-                    description: desc, 
-                    category: cat, 
+                const itemPayload = {
+                    title,
+                    description: desc,
+                    category: cat,
                     shareSlug: itemShareSlug,
                     imageUrl: img,
                     status: 'approved',
+                    visibility,
                     submitterEmail: 'Admin',
-                    createdAt: serverTimestamp(),
                     files: [{
                         name: resolvedFileLabel,
                         url: resolveSecurityBackendDownloadUrl(releasePayload),
@@ -1328,10 +1551,22 @@
                         uploadedAt: new Date().toISOString(),
                         backendScan: buildBackendScanMetaFromReport(releasedReport)
                     }]
-                });
+                };
+
+                if (visibility === 'sensitive') {
+                    await createSensitiveBackendItem(itemPayload);
+                    await refreshSensitiveItems();
+                } else {
+                    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items'), {
+                        ...itemPayload,
+                        createdAt: serverTimestamp()
+                    });
+                }
 
                 updateStatus(100, "Deployment Successful!");
-                showToast("Stream scanned, released, and synced to the Hub!");
+                showToast(visibility === 'sensitive'
+                    ? "Sensitive file stored in backend-only catalog and protected routes."
+                    : "Stream scanned, released, and synced to the Hub!");
                 await refreshSecurityIncidents();
                 
                 setTimeout(() => {
@@ -1350,3 +1585,4 @@
 
 
         window.abortOperation = () => location.reload();
+        restoreAdminSession();
