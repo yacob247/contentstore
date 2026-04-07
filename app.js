@@ -1,7 +1,7 @@
    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, deleteDoc, doc, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        import { auditSubmissionDraft } from "./sandbox-auditor.js";
+        import { auditSubmissionDraft } from "./security/sandbox-auditor.js";
         import {
             buildFileShareHash,
             buildItemShareHash,
@@ -440,7 +440,12 @@
             const match = findFileByShareSlug(item, fileShareSlug);
             if (!match) return;
 
-            await copyTextToClipboard(buildFileShareUrl(item, match.file, match.index), "File link copied.");
+            const videoMeta = getEmbeddableVideoMeta(match.file);
+            const linkToCopy = videoMeta
+                ? buildFileShareUrl(item, match.file, match.index)
+                : (match.file?.url || buildFileShareUrl(item, match.file, match.index));
+
+            await copyTextToClipboard(linkToCopy, videoMeta ? "Video link copied." : "Download link copied.");
         };
 
         window.playVideo = (ytId) => {
@@ -882,14 +887,29 @@
             return buildSecurityBackendUrl(`/api/uploads/${scanId}/file`);
         }
 
+        function getSecurityBackendDownloadUrl(downloadId) {
+            return buildSecurityBackendUrl(`/api/downloads/${downloadId}`);
+        }
+
+        function resolveSecurityBackendDownloadUrl(scanResult) {
+            const downloadId = scanResult?.downloadId || scanResult?.links?.downloadId || scanResult?.id;
+            if (scanResult?.downloadPath) {
+                return buildSecurityBackendUrl(scanResult.downloadPath);
+            }
+            return getSecurityBackendDownloadUrl(downloadId);
+        }
+
         function buildBackendScanMeta(scanResult) {
             if (!scanResult?.id) return null;
+            const downloadId = scanResult?.downloadId || scanResult?.links?.downloadId || scanResult.id;
             return {
                 id: scanResult.id,
+                downloadId,
                 status: scanResult.status,
                 verdict: scanResult.verdict,
                 reportUrl: getSecurityBackendReportUrl(scanResult.id),
                 fileUrl: getSecurityBackendFileUrl(scanResult.id),
+                downloadUrl: resolveSecurityBackendDownloadUrl(scanResult),
                 findings: (scanResult.findings || []).map(finding => ({
                     kind: finding.kind || '',
                     severity: finding.severity || '',
@@ -1191,7 +1211,7 @@
                             fileLabel: draft.name,
                             fileCategory: draft.type
                         }, onProgress);
-                        fileData.url = getSecurityBackendFileUrl(scanResult.id);
+                        fileData.url = resolveSecurityBackendDownloadUrl(scanResult);
                         fileData.backendScan = buildBackendScanMeta(scanResult);
                         processedCount++;
                     }
