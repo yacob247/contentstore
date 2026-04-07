@@ -1,7 +1,7 @@
    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, deleteDoc, doc, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        import { auditSubmissionDraft } from "./sandbox-auditor.js";
+        import { auditSubmissionDraft } from "./security/sandbox-auditor.js";
         import {
             buildFileShareHash,
             buildItemShareHash,
@@ -51,13 +51,21 @@
             'other': { label: 'Misc / Other', icon: 'fa-file', color: 'text-gray-400' }
         };
 
+        function isLoopbackHostname(hostname) {
+            return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+        }
+
         function resolveSecurityBackendBaseUrl() {
             if (typeof __security_backend_url !== 'undefined' && __security_backend_url) {
                 return __security_backend_url;
             }
 
             if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
-                return `${window.location.protocol}//${window.location.hostname}:8787`;
+                if (isLoopbackHostname(window.location.hostname)) {
+                    return `${window.location.protocol}//${window.location.hostname}:8787`;
+                }
+
+                return window.location.origin;
             }
 
             return 'http://127.0.0.1:8787';
