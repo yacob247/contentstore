@@ -20,6 +20,8 @@
         const state = {
             currentView: 'home',
             currentCategory: 'all',
+            publicCatalogItems: [],
+            loadedSensitiveItems: [],
             allItems: [], 
             items: [],    
             folders: [],  
@@ -34,7 +36,8 @@
             draftImage: { inputType: 'url', url: '', file: null },
             draftFiles: [],
             auditErrors: [],
-            lastHandledShareRoute: ''
+            lastHandledShareRoute: '',
+            lastDeniedShareRoute: ''
         };
 
         const CATEGORIES = {
@@ -48,7 +51,19 @@
             'other': { label: 'Misc / Other', icon: 'fa-file', color: 'text-gray-400' }
         };
 
-        const SECURITY_BACKEND_BASE_URL = (typeof __security_backend_url !== 'undefined' ? __security_backend_url : 'http://127.0.0.1:8787').replace(/\/+$/, '');
+        function resolveSecurityBackendBaseUrl() {
+            if (typeof __security_backend_url !== 'undefined' && __security_backend_url) {
+                return __security_backend_url;
+            }
+
+            if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
+                return `${window.location.protocol}//${window.location.hostname}:8787`;
+            }
+
+            return 'http://127.0.0.1:8787';
+        }
+
+        const SECURITY_BACKEND_BASE_URL = resolveSecurityBackendBaseUrl().replace(/\/+$/, '');
 
         let app, auth, db, appId;
         let unsubPublic = null;
@@ -56,6 +71,33 @@
 
         function getCategoryInfo(category) {
             return CATEGORIES[normalizeCategory(category)] || CATEGORIES['other'];
+        }
+
+        function normalizeCatalogItemRecord(rawItem, origin = 'firestore') {
+            return {
+                ...rawItem,
+                category: normalizeCategory(rawItem.category),
+                visibility: rawItem.visibility === 'sensitive' || origin === 'backend_sensitive' ? 'sensitive' : 'public',
+                storageOrigin: origin,
+                files: (rawItem.files || []).map(file => ({
+                    ...file,
+                    type: normalizeCategory(file.type || rawItem.category)
+                }))
+            };
+        }
+
+        function syncCatalogCollections() {
+            state.allItems = [...state.publicCatalogItems, ...state.loadedSensitiveItems];
+            state.items = state.publicCatalogItems.filter(i => i.status === 'approved');
+        }
+
+        function upsertLoadedSensitiveItem(item) {
+            const normalized = normalizeCatalogItemRecord(item, 'backend_sensitive');
+            const nextItems = state.loadedSensitiveItems.filter(entry => entry.id !== normalized.id);
+            nextItems.push(normalized);
+            state.loadedSensitiveItems = nextItems;
+            syncCatalogCollections();
+            return normalized;
         }
 
         function getPublicAppBaseUrl() {
@@ -133,12 +175,28 @@
             state.lastHandledShareRoute = '';
         }
 
-        function handleShareRoute() {
+        function openCannotAccessModal() {
+            openModal(`
+                <div class="bg-gray-900 rounded-2xl w-full max-w-lg border border-red-500/20 shadow-2xl relative overflow-hidden fade-in">
+                    <button onclick="closeModal()" class="absolute top-4 right-4 text-gray-400 hover:text-white transition-colors"><i class="fa-solid fa-times text-xl"></i></button>
+                    <div class="p-8">
+                        <div class="w-16 h-16 rounded-2xl bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-400 mb-5">
+                            <i class="fa-solid fa-ban text-2xl"></i>
+                        </div>
+                        <h3 class="text-2xl font-extrabold text-white mb-2">Cannot access</h3>
+                        <p class="text-sm text-gray-400 leading-relaxed">This content is stored behind the server access layer and is not available to the current session.</p>
+                    </div>
+                </div>
+            `, { shareRoute: true });
+        }
+
+        async function handleShareRoute() {
             const route = parseShareRoute();
             const routeKey = route ? `${route.type}:${route.itemSlug}:${route.fileSlug || ''}` : '';
 
             if (!route) {
                 state.lastHandledShareRoute = '';
+                state.lastDeniedShareRoute = '';
                 const modal = document.getElementById('modal-container');
                 if (modal && !modal.classList.contains('hidden') && modal.dataset.shareRoute === 'true') {
                     window.closeModal(false);
@@ -146,11 +204,27 @@
                 return;
             }
 
-            if (routeKey === state.lastHandledShareRoute || !state.allItems.length) return;
+            if (state.isLoading) return;
+            if (routeKey === state.lastHandledShareRoute || routeKey === state.lastDeniedShareRoute) return;
 
-            const item = findItemByShareSlug(route.itemSlug);
-            if (!item) return;
+            let item = findItemByShareSlug(route.itemSlug);
+            if (!item) {
+                const privateMatch = await fetchSensitiveSharedItem(route.itemSlug);
+                if (!privateMatch) return;
 
+                if (privateMatch.unauthorized) {
+                    state.lastDeniedShareRoute = routeKey;
+                    openCannotAccessModal();
+                    return;
+                }
+
+                if (!privateMatch.item) return;
+
+                item = upsertLoadedSensitiveItem(privateMatch.item);
+                render();
+            }
+
+            state.lastDeniedShareRoute = '';
             state.lastHandledShareRoute = routeKey;
 
             if (route.type === 'watch' && route.fileSlug) {
@@ -206,18 +280,8 @@
             if (!unsubPublic) {
                 const itemsRef = collection(db, 'artifacts', appId, 'public', 'data', 'content_hub_items');
                 unsubPublic = onSnapshot(itemsRef, (snapshot) => {
-                    state.allItems = snapshot.docs.map(doc => {
-                        const rawItem = { id: doc.id, ...doc.data() };
-                        return {
-                            ...rawItem,
-                            category: normalizeCategory(rawItem.category),
-                            files: (rawItem.files || []).map(file => ({
-                                ...file,
-                                type: normalizeCategory(file.type || rawItem.category)
-                            }))
-                        };
-                    });
-                    state.items = state.allItems.filter(i => i.status === 'approved');
+                    state.publicCatalogItems = snapshot.docs.map(doc => normalizeCatalogItemRecord({ id: doc.id, ...doc.data() }, 'firestore'));
+                    syncCatalogCollections();
                     state.isLoading = false;
                     render();
                     handleShareRoute();
@@ -877,6 +941,34 @@
 
         function buildSecurityBackendUrl(path) {
             return `${SECURITY_BACKEND_BASE_URL}${path}`;
+        }
+
+        async function fetchSensitiveSharedItem(itemSlug) {
+            try {
+                const response = await fetch(buildSecurityBackendUrl(`/api/private/share/${encodeURIComponent(itemSlug)}`), {
+                    credentials: 'include'
+                });
+
+                let payload = null;
+                try {
+                    payload = await response.json();
+                } catch (error) {
+                    payload = null;
+                }
+
+                if (response.status === 401 || response.status === 403) {
+                    return { unauthorized: true };
+                }
+
+                if (!response.ok) {
+                    return null;
+                }
+
+                return { item: payload?.item || null };
+            } catch (error) {
+                console.error('Sensitive share lookup failed', error);
+                return null;
+            }
         }
 
         function getSecurityBackendReportUrl(scanId) {
